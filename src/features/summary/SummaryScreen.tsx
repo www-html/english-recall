@@ -29,7 +29,7 @@ export function SummaryScreen({
         <div className="summary-stats">
           <div><Check size={18} aria-hidden="true" /><span><strong>{result.correctAnswers}</strong> correct</span></div>
           <div><RotateCcw size={18} aria-hidden="true" /><span><strong>{result.incorrectAnswers}</strong> to review</span></div>
-          <div><Target size={18} aria-hidden="true" /><span><strong>{result.reviewedItems}</strong> practiced</span></div>
+          <div><Target size={18} aria-hidden="true" /><span><strong>{result.reviewedLexemes}</strong> words practiced</span></div>
         </div>
 
         <div className="summary-actions">

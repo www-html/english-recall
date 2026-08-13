@@ -3,6 +3,9 @@ import {
   type LessonPack,
 } from '../domain/lesson-pack.schema.ts'
 import type {
+  AnswerEvaluation,
+  AttemptSignal,
+  AttemptSummary,
   LearningSessionSnapshot,
   ReviewSchedule,
 } from '../learning-engine/index.ts'
@@ -38,7 +41,13 @@ function ok<T>(value: T): Result<T, PersistenceError> {
 
 function toError(error: unknown, fallbackMessage: string): PersistenceError {
   const isQuotaError = error instanceof DOMException && error.name === 'QuotaExceededError'
-  const code: PersistenceErrorCode = isQuotaError ? 'quota-exceeded' : 'unknown'
+  const isUnavailable =
+    error instanceof Error && error.message === 'IndexedDB is not available'
+  const code: PersistenceErrorCode = isQuotaError
+    ? 'quota-exceeded'
+    : isUnavailable
+      ? 'unavailable'
+      : 'unknown'
   return { code, message: fallbackMessage, cause: error }
 }
 
@@ -57,59 +66,229 @@ function transactionComplete(transaction: IDBTransaction): Promise<void> {
   })
 }
 
+function isIsoDateTime(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    Number.isFinite(Date.parse(value))
+  )
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0
+}
+
 function isReviewSchedule(value: unknown): value is ReviewSchedule {
   if (!value || typeof value !== 'object') return false
   const schedule = value as Record<string, unknown>
   return (
-    typeof schedule.dueAt === 'string' &&
-    typeof schedule.intervalDays === 'number' &&
-    typeof schedule.easeFactor === 'number' &&
-    typeof schedule.repetitions === 'number' &&
-    typeof schedule.lapses === 'number'
+    isIsoDateTime(schedule.dueAt) &&
+    Number.isFinite(schedule.intervalDays) &&
+    (schedule.intervalDays as number) >= 0 &&
+    Number.isFinite(schedule.easeFactor) &&
+    (schedule.easeFactor as number) >= 1 &&
+    Number.isInteger(schedule.repetitions) &&
+    (schedule.repetitions as number) >= 0 &&
+    Number.isInteger(schedule.lapses) &&
+    (schedule.lapses as number) >= 0
   )
 }
 
 function isLearnerProgress(value: unknown): value is LearnerProgress {
   if (!value || typeof value !== 'object') return false
   const progress = value as Record<string, unknown>
-  const schedules = progress.schedulesByReviewKey
+  const schedules = progress.schedulesByLexemeReviewKey
 
   return (
     Boolean(schedules) &&
     typeof schedules === 'object' &&
     Object.values(schedules as Record<string, unknown>).every(isReviewSchedule) &&
-    typeof progress.sessionsCompleted === 'number' &&
-    typeof progress.totalAnswers === 'number' &&
-    typeof progress.correctAnswers === 'number' &&
-    (progress.lastStudiedAt === undefined || typeof progress.lastStudiedAt === 'string')
+    isNonNegativeInteger(progress.sessionsCompleted) &&
+    isNonNegativeInteger(progress.totalAnswers) &&
+    isNonNegativeInteger(progress.correctAnswers) &&
+    (progress.correctAnswers as number) <= (progress.totalAnswers as number) &&
+    (progress.lastStudiedAt === undefined || isIsoDateTime(progress.lastStudiedAt))
+  )
+}
+
+function migrateLegacyProgress(value: unknown): LearnerProgress | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const progress = value as Record<string, unknown>
+  if (
+    !('schedulesByReviewKey' in progress) ||
+    !isNonNegativeInteger(progress.sessionsCompleted) ||
+    !isNonNegativeInteger(progress.totalAnswers) ||
+    !isNonNegativeInteger(progress.correctAnswers) ||
+    progress.correctAnswers > progress.totalAnswers
+  ) {
+    return undefined
+  }
+
+  // V1 schedules used item ids and cannot be safely mapped to lexemes without
+  // content context. Preserve aggregate history, but intentionally reset SRS.
+  return {
+    schedulesByLexemeReviewKey: {},
+    sessionsCompleted: progress.sessionsCompleted,
+    totalAnswers: progress.totalAnswers,
+    correctAnswers: progress.correctAnswers,
+    ...(isIsoDateTime(progress.lastStudiedAt)
+      ? { lastStudiedAt: progress.lastStudiedAt }
+      : {}),
+  }
+}
+
+function isStringRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isAttemptSummary(value: unknown): value is AttemptSummary {
+  if (!isStringRecord(value)) return false
+  return (
+    isNonNegativeInteger(value.attempts) &&
+    isNonNegativeInteger(value.correct) &&
+    isNonNegativeInteger(value.incorrect) &&
+    isNonNegativeInteger(value.skipped) &&
+    (value.attempts as number) ===
+      (value.correct as number) +
+        (value.incorrect as number) +
+        (value.skipped as number) &&
+    isIsoDateTime(value.lastReviewedAt) &&
+    (value.lastRating === undefined ||
+      ['again', 'hard', 'good', 'easy'].includes(String(value.lastRating)))
+  )
+}
+
+function isAttemptSignal(value: unknown): value is AttemptSignal {
+  if (!isStringRecord(value)) return false
+  return (
+    typeof value.lexemeId === 'string' &&
+    typeof value.sentenceId === 'string' &&
+    typeof value.targetId === 'string' &&
+    (value.exerciseMode === 'word-choice' ||
+      value.exerciseMode === 'fill-words' ||
+      value.exerciseMode === 'listening-choice') &&
+    (value.outcome === 'correct' ||
+      value.outcome === 'incorrect' ||
+      value.outcome === 'skipped') &&
+    typeof value.firstTry === 'boolean' &&
+    Number.isInteger(value.wrongAttempts) &&
+    (value.wrongAttempts as number) >= 0 &&
+    Number.isFinite(value.responseTimeMs) &&
+    (value.responseTimeMs as number) >= 0 &&
+    isIsoDateTime(value.reviewedAt) &&
+    isIsoDateTime(value.nextReviewAt)
+  )
+}
+
+function isAnswerEvaluation(value: unknown): value is AnswerEvaluation {
+  if (!isStringRecord(value)) return false
+  const common =
+    typeof value.lexemeId === 'string' &&
+    typeof value.sentenceId === 'string' &&
+    typeof value.targetId === 'string' &&
+    typeof value.response === 'string' &&
+    ['again', 'hard', 'good', 'easy'].includes(String(value.rating)) &&
+    typeof value.firstTry === 'boolean' &&
+    Number.isInteger(value.wrongAttempts) &&
+    (value.wrongAttempts as number) >= 0
+  if (!common) return false
+  if (value.outcome === 'correct') return typeof value.expectedAnswer === 'string'
+  return (
+    (value.outcome === 'incorrect' || value.outcome === 'skipped') &&
+    value.expectedAnswer === undefined
   )
 }
 
 function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
-  if (!value || typeof value !== 'object') return false
-  const session = value as Record<string, unknown>
+  if (!isStringRecord(value)) return false
+  const session = value
+  const attempts = session.attemptsByLexemeId
+  const schedules = session.schedulesByLexemeId
+  const wrongChoices = session.wrongChoiceIdsByOccurrenceKey
 
   return (
     typeof session.id === 'string' &&
     typeof session.packId === 'string' &&
     typeof session.lessonId === 'string' &&
-    Array.isArray(session.itemQueue) &&
-    session.itemQueue.every((item) => typeof item === 'string') &&
-    typeof session.currentIndex === 'number' &&
-    (session.phase === 'question' || session.phase === 'feedback') &&
-    typeof session.startedAt === 'string' &&
-    typeof session.updatedAt === 'string'
+    Array.isArray(session.sentenceQueue) &&
+    session.sentenceQueue.length > 0 &&
+    session.sentenceQueue.every((item) => typeof item === 'string') &&
+    Number.isInteger(session.currentSentenceIndex) &&
+    (session.currentSentenceIndex as number) >= 0 &&
+    (session.currentSentenceIndex as number) < session.sentenceQueue.length &&
+    typeof session.currentSentenceId === 'string' &&
+    session.currentSentenceId ===
+      session.sentenceQueue[session.currentSentenceIndex as number] &&
+    Number.isInteger(session.currentTargetIndex) &&
+    (session.currentTargetIndex as number) >= 0 &&
+    typeof session.currentTargetId === 'string' &&
+    Array.isArray(session.solvedTargetIds) &&
+    session.solvedTargetIds.every((id) => typeof id === 'string') &&
+    (session.phase === 'question' ||
+      session.phase === 'target-feedback' ||
+      session.phase === 'sentence-complete') &&
+    (session.learningMode === 'auto' ||
+      session.learningMode === 'word-choice' ||
+      session.learningMode === 'fill-words' ||
+      session.learningMode === 'listening-choice') &&
+    (session.exerciseMode === 'word-choice' ||
+      session.exerciseMode === 'fill-words' ||
+      session.exerciseMode === 'listening-choice') &&
+    (session.lastEvaluation === undefined ||
+      isAnswerEvaluation(session.lastEvaluation)) &&
+    isStringRecord(wrongChoices) &&
+    Object.values(wrongChoices).every(
+      (ids) => Array.isArray(ids) && ids.every((id) => typeof id === 'string'),
+    ) &&
+    isStringRecord(attempts) &&
+    Object.values(attempts).every(isAttemptSummary) &&
+    Array.isArray(session.attemptHistory) &&
+    session.attemptHistory.every(isAttemptSignal) &&
+    isStringRecord(schedules) &&
+    Object.values(schedules).every(isReviewSchedule) &&
+    isIsoDateTime(session.startedAt) &&
+    isIsoDateTime(session.questionStartedAt) &&
+    isIsoDateTime(session.updatedAt)
   )
 }
 
-function isSettings(value: unknown): value is AppSettings {
-  if (!value || typeof value !== 'object') return false
-  const settings = value as Record<string, unknown>
-  return (
-    typeof settings.autoMode === 'boolean' &&
-    typeof settings.audioEnabled === 'boolean' &&
-    typeof settings.speechRate === 'number'
-  )
+function normalizeSettings(value: unknown): AppSettings | undefined {
+  if (!isStringRecord(value)) return undefined
+  const audioEnabled = value.audioEnabled
+  const speechRate = value.speechRate
+  if (
+    typeof audioEnabled !== 'boolean' ||
+    !Number.isFinite(speechRate) ||
+    (speechRate as number) < 0.5 ||
+    (speechRate as number) > 2
+  ) {
+    return undefined
+  }
+
+  if (
+    (value.learningMode === 'auto' ||
+      value.learningMode === 'word-choice' ||
+      value.learningMode === 'fill-words' ||
+      value.learningMode === 'listening-choice') &&
+    typeof value.autoAdvance === 'boolean'
+  ) {
+    return {
+      learningMode: value.learningMode,
+      autoAdvance: value.autoAdvance,
+      audioEnabled,
+      speechRate: speechRate as number,
+    }
+  }
+
+  if (typeof value.autoMode === 'boolean') {
+    return {
+      learningMode: 'auto',
+      autoAdvance: value.autoMode,
+      audioEnabled,
+      speechRate: speechRate as number,
+    }
+  }
+  return undefined
 }
 
 class IndexedDbConnection {
@@ -196,8 +375,13 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
           version: pack.version,
           title: pack.title,
           lessonCount: pack.lessons.length,
-          itemCount: pack.lessons.reduce(
-            (count, lesson) => count + lesson.items.length,
+          targetCount: pack.lessons.reduce(
+            (count, lesson) =>
+              count +
+              lesson.sentences.reduce(
+                (targetCount, sentence) => targetCount + sentence.targets.length,
+                0,
+              ),
             0,
           ),
         })),
@@ -271,6 +455,11 @@ class IndexedDbProgressRepository implements ProgressRepository {
       const value = await getStoredValue(this.connection, progressKey)
       if (value === undefined) return ok(null)
       if (!isLearnerProgress(value)) {
+        const migrated = migrateLegacyProgress(value)
+        if (migrated) {
+          await saveStoredValue(this.connection, progressKey, migrated)
+          return ok(migrated)
+        }
         return {
           ok: false,
           error: { code: 'invalid-data', message: 'Stored progress is invalid' },
@@ -283,6 +472,12 @@ class IndexedDbProgressRepository implements ProgressRepository {
   }
 
   async saveProgress(progress: LearnerProgress): Promise<Result<void, PersistenceError>> {
+    if (!isLearnerProgress(progress)) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Progress is invalid' },
+      }
+    }
     try {
       await saveStoredValue(this.connection, progressKey, progress)
       return ok(undefined)
@@ -298,6 +493,10 @@ class IndexedDbProgressRepository implements ProgressRepository {
       const value = await getStoredValue(this.connection, sessionKey)
       if (value === undefined) return ok(null)
       if (!isSessionSnapshot(value)) {
+        if (isStringRecord(value) && Array.isArray(value.itemQueue)) {
+          await removeStoredValue(this.connection, sessionKey)
+          return ok(null)
+        }
         return {
           ok: false,
           error: { code: 'invalid-data', message: 'Stored session is invalid' },
@@ -312,6 +511,12 @@ class IndexedDbProgressRepository implements ProgressRepository {
   async saveActiveSession(
     session: LearningSessionSnapshot,
   ): Promise<Result<void, PersistenceError>> {
+    if (!isSessionSnapshot(session)) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Session is invalid' },
+      }
+    }
     try {
       await saveStoredValue(this.connection, sessionKey, session)
       return ok(undefined)
@@ -341,19 +546,29 @@ class IndexedDbSettingsRepository implements SettingsRepository {
     try {
       const value = await getStoredValue(this.connection, settingsKey)
       if (value === undefined) return ok(null)
-      if (!isSettings(value)) {
+      const settings = normalizeSettings(value)
+      if (!settings) {
         return {
           ok: false,
           error: { code: 'invalid-data', message: 'Stored settings are invalid' },
         }
       }
-      return ok(value)
+      if (isStringRecord(value) && !('learningMode' in value)) {
+        await saveStoredValue(this.connection, settingsKey, settings)
+      }
+      return ok(settings)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not load settings') }
     }
   }
 
   async save(settings: AppSettings): Promise<Result<void, PersistenceError>> {
+    if (!normalizeSettings(settings)) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Settings are invalid' },
+      }
+    }
     try {
       await saveStoredValue(this.connection, settingsKey, settings)
       return ok(undefined)

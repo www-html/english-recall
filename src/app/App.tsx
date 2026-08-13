@@ -3,17 +3,24 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import starterPackJson from '../data/starter-pack.json'
 import {
   parseLessonPack,
-  type LearningItem,
   type Lesson,
   type LessonPack,
+  type Lexeme,
+  type Sentence,
+  type TargetOccurrence,
 } from '../domain/lesson-pack.schema.ts'
 import { HomeScreen } from '../features/home/HomeScreen.tsx'
-import { LearningScreen } from '../features/learning/LearningScreen.tsx'
+import {
+  LearningScreen,
+  type LearningFeedback,
+} from '../features/learning/LearningScreen.tsx'
 import { PauseScreen } from '../features/pause/PauseScreen.tsx'
 import { SummaryScreen } from '../features/summary/SummaryScreen.tsx'
 import {
+  createTargetOccurrenceKey,
   DefaultLearningEngine,
   type LearningEngineState,
+  type LearningMode,
   type LearningResponse,
   type LearningSessionSnapshot,
 } from '../learning-engine/index.ts'
@@ -26,21 +33,35 @@ import {
   type LearnerProgress,
 } from '../persistence/index.ts'
 import './app.css'
-import { useSpeech } from './use-speech.ts'
+import { getSlowerSpeechRate, useSpeech } from './use-speech.ts'
 
 type AppView = 'home' | 'learning' | 'pause' | 'summary'
+
+interface SessionContext {
+  readonly pack: LessonPack
+  readonly lesson: Lesson
+  readonly sentence: Sentence
+  readonly target: TargetOccurrence
+  readonly lexeme: Lexeme
+  readonly choices: readonly Lexeme[]
+}
 
 function schedulesForSession(
   progress: LearnerProgress,
   pack: LessonPack,
   lesson: Lesson,
 ) {
+  const lexemeIds = new Set(
+    lesson.sentences.flatMap((sentence) =>
+      sentence.targets.map((target) => target.lexemeId),
+    ),
+  )
+
   return Object.fromEntries(
-    lesson.items.flatMap((item) => {
-      const schedule = progress.schedulesByReviewKey[
-        createReviewKey(pack.id, item.id)
-      ]
-      return schedule ? [[item.id, schedule] as const] : []
+    [...lexemeIds].flatMap((lexemeId) => {
+      const schedule =
+        progress.schedulesByLexemeReviewKey[createReviewKey(pack.id, lexemeId)]
+      return schedule ? [[lexemeId, schedule] as const] : []
     }),
   )
 }
@@ -49,29 +70,102 @@ function mergeSessionSchedules(
   progress: LearnerProgress,
   session: LearningSessionSnapshot,
 ): LearnerProgress {
-  const schedulesByReviewKey = { ...progress.schedulesByReviewKey }
+  const schedulesByLexemeReviewKey = {
+    ...progress.schedulesByLexemeReviewKey,
+  }
 
-  Object.entries(session.schedulesByItemId).forEach(([itemId, schedule]) => {
-    schedulesByReviewKey[createReviewKey(session.packId, itemId)] = schedule
+  Object.entries(session.schedulesByLexemeId).forEach(
+    ([lexemeId, schedule]) => {
+      schedulesByLexemeReviewKey[
+        createReviewKey(session.packId, lexemeId)
+      ] = schedule
+    },
+  )
+
+  return { ...progress, schedulesByLexemeReviewKey }
+}
+
+function orderedChoices(
+  pack: LessonPack,
+  target: TargetOccurrence,
+): readonly Lexeme[] {
+  const choiceIds = [target.lexemeId, ...target.distractorLexemeIds]
+  const rotation = [...`${target.lexemeId}:${target.id}`].reduce(
+    (sum, character) => sum + character.charCodeAt(0),
+    0,
+  ) % choiceIds.length
+  const rotated = [...choiceIds.slice(rotation), ...choiceIds.slice(0, rotation)]
+
+  return rotated.flatMap((id) => {
+    const lexeme = pack.lexemes.find((candidate) => candidate.id === id)
+    return lexeme ? [lexeme] : []
   })
-
-  return { ...progress, schedulesByReviewKey }
 }
 
 function findSessionContext(
   packs: readonly LessonPack[],
   state: LearningEngineState,
-): { pack: LessonPack; lesson: Lesson; item?: LearningItem } | null {
+): SessionContext | null {
   if (state.status === 'idle' || state.status === 'error') return null
   const pack = packs.find((candidate) => candidate.id === state.session.packId)
   const lesson = pack?.lessons.find(
     (candidate) => candidate.id === state.session.lessonId,
   )
-  if (!pack || !lesson) return null
+  const sentence = lesson?.sentences.find(
+    (candidate) => candidate.id === state.session.currentSentenceId,
+  )
+  const target = sentence?.targets.find(
+    (candidate) => candidate.id === state.session.currentTargetId,
+  )
+  const lexeme = pack?.lexemes.find(
+    (candidate) => candidate.id === target?.lexemeId,
+  )
 
-  const currentId = state.session.itemQueue[state.session.currentIndex]
-  const item = lesson.items.find((candidate) => candidate.id === currentId)
-  return item ? { pack, lesson, item } : { pack, lesson }
+  if (!pack || !lesson || !sentence || !target || !lexeme) return null
+  return {
+    pack,
+    lesson,
+    sentence,
+    target,
+    lexeme,
+    choices: orderedChoices(pack, target),
+  }
+}
+
+function targetStep(
+  lesson: Lesson,
+  session: LearningSessionSnapshot,
+): { current: number; total: number } {
+  const queuedSentences = session.sentenceQueue.flatMap((sentenceId) => {
+    const sentence = lesson.sentences.find((candidate) => candidate.id === sentenceId)
+    return sentence ? [sentence] : []
+  })
+  const total = queuedSentences.reduce(
+    (count, sentence) => count + sentence.targets.length,
+    0,
+  )
+  const previous = queuedSentences
+    .slice(0, session.currentSentenceIndex)
+    .reduce((count, sentence) => count + sentence.targets.length, 0)
+
+  return {
+    current: Math.min(total, previous + session.currentTargetIndex + 1),
+    total,
+  }
+}
+
+function feedbackForSession(
+  session: LearningSessionSnapshot,
+): LearningFeedback {
+  if (session.phase === 'target-feedback') return 'correct'
+  if (
+    session.phase === 'question' &&
+    session.lastEvaluation?.targetId === session.currentTargetId &&
+    session.lastEvaluation.outcome === 'incorrect'
+  ) {
+    return 'incorrect'
+  }
+  return 'idle'
 }
 
 export default function App() {
@@ -95,6 +189,7 @@ export default function App() {
   const [storageAvailable, setStorageAvailable] = useState(true)
   const [notice, setNotice] = useState<string>()
   const completedSessions = useRef(new Set<string>())
+  const lastAutoSpokenQuestion = useRef<string | undefined>(undefined)
 
   useEffect(() => engine.subscribe(setEngineState), [engine])
 
@@ -103,12 +198,7 @@ export default function App() {
 
     const bootstrap = async () => {
       const builtInPack = parseLessonPack(starterPackJson)
-      const existingBuiltIn = await provider.lessonPacks.get(builtInPack.id)
-
-      if (!existingBuiltIn.ok && existingBuiltIn.error.code === 'not-found') {
-        await provider.lessonPacks.save(builtInPack)
-      }
-
+      const savedBuiltIn = await provider.lessonPacks.save(builtInPack)
       const [packListResult, progressResult, settingsResult, sessionResult] =
         await Promise.all([
           provider.lessonPacks.list(),
@@ -120,7 +210,7 @@ export default function App() {
       if (!active) return
 
       let loadedPacks: LessonPack[] = [builtInPack]
-      if (packListResult.ok) {
+      if (savedBuiltIn.ok && packListResult.ok) {
         const loaded = await Promise.all(
           packListResult.value.map((summary) => provider.lessonPacks.get(summary.id)),
         )
@@ -130,15 +220,19 @@ export default function App() {
         }
       } else {
         setStorageAvailable(false)
-        setNotice('IndexedDB is unavailable. Learning works, but progress cannot be saved.')
+        setNotice(
+          'IndexedDB is unavailable. Learning works, but progress cannot be saved.',
+        )
       }
 
-      const loadedProgress = progressResult.ok && progressResult.value
-        ? progressResult.value
-        : createInitialProgress()
-      const loadedSettings = settingsResult.ok && settingsResult.value
-        ? settingsResult.value
-        : defaultAppSettings
+      const loadedProgress =
+        progressResult.ok && progressResult.value
+          ? progressResult.value
+          : createInitialProgress()
+      const loadedSettings =
+        settingsResult.ok && settingsResult.value
+          ? settingsResult.value
+          : defaultAppSettings
 
       progressRef.current = loadedProgress
       setPacks(loadedPacks)
@@ -154,8 +248,11 @@ export default function App() {
             pack: savedPack,
             snapshot: sessionResult.value,
           })
-          if (!restored.ok) await provider.progress.clearActiveSession()
+          if (!restored.ok) void provider.progress.clearActiveSession()
         }
+      } else if (!sessionResult.ok && sessionResult.error.code === 'invalid-data') {
+        void provider.progress.clearActiveSession()
+        setNotice('An incompatible saved session was reset. Your mastery remains saved.')
       }
 
       setBooting(false)
@@ -209,34 +306,46 @@ export default function App() {
     }
   }, [engineState, provider])
 
-  const context = findSessionContext(packs, engineState)
+  const context = useMemo(
+    () => findSessionContext(packs, engineState),
+    [engineState, packs],
+  )
 
   useEffect(() => {
-    if (engineState.status !== 'active' || !context?.item) return
+    if (engineState.status !== 'active' || !context) return
+    const { session } = engineState
 
-    if (engineState.session.phase === 'question') {
-      if (settings.autoMode && settings.audioEnabled) {
-        const item = context.item
-        const text =
-          item.audioText ??
-          (item.kind === 'flashcard' ? item.front : item.prompt)
-        speak(text, settings.speechRate)
+    if (
+      session.phase === 'question' &&
+      session.exerciseMode === 'listening-choice' &&
+      settings.audioEnabled
+    ) {
+      const questionKey = [
+        session.id,
+        session.currentSentenceId,
+        session.currentTargetId,
+        session.questionStartedAt,
+        session.exerciseMode,
+      ].join('::')
+      if (lastAutoSpokenQuestion.current !== questionKey) {
+        lastAutoSpokenQuestion.current = questionKey
+        speak(context.sentence.speechText, settings.speechRate)
       }
-      return
     }
 
-    if (settings.audioEnabled && engineState.session.lastEvaluation) {
-      speak(
-        engineState.session.lastEvaluation.expectedAnswer,
-        settings.speechRate,
-      )
-    }
-
-    if (settings.autoMode) {
-      const timeout = window.setTimeout(() => engine.advance(), 1_700)
+    if (session.phase === 'target-feedback') {
+      if (settings.audioEnabled) {
+        speak(context.lexeme.spokenText ?? context.lexeme.text, settings.speechRate)
+      }
+      const timeout = window.setTimeout(() => engine.advance(), 300)
       return () => window.clearTimeout(timeout)
     }
-  }, [context?.item, engine, engineState, settings, speak])
+
+    if (session.phase === 'sentence-complete' && settings.autoAdvance) {
+      const timeout = window.setTimeout(() => engine.advance(), 2_000)
+      return () => window.clearTimeout(timeout)
+    }
+  }, [context, engine, engineState, settings, speak])
 
   const updateSettings = (next: AppSettings) => {
     setSettings(next)
@@ -244,12 +353,22 @@ export default function App() {
     if (!next.audioEnabled) stopSpeaking()
   }
 
+  const setLearningMode = (learningMode: LearningMode) => {
+    const result = engine.setLearningMode(learningMode)
+    if (!result.ok) {
+      setNotice(result.error.message)
+      return
+    }
+    updateSettings({ ...settings, learningMode })
+  }
+
   const startLesson = (pack: LessonPack, lesson: Lesson) => {
     stopSpeaking()
     const result = engine.start({
       pack,
       lessonId: lesson.id,
-      schedulesByItemId: schedulesForSession(progressRef.current, pack, lesson),
+      schedulesByLexemeId: schedulesForSession(progressRef.current, pack, lesson),
+      learningMode: settings.learningMode,
     })
     if (!result.ok) {
       setNotice(result.error.message)
@@ -274,6 +393,14 @@ export default function App() {
   const submitAnswer = (response: LearningResponse) => {
     const result = engine.submit(response)
     if (!result.ok) setNotice(result.error.message)
+  }
+
+  const endSession = () => {
+    stopSpeaking()
+    engine.reset()
+    setView('home')
+    setNotice('Session ended. Completed reviews remain saved.')
+    void provider.progress.clearActiveSession()
   }
 
   const importLessonPack = async (file: File) => {
@@ -314,41 +441,93 @@ export default function App() {
         <AlertTriangle size={30} aria-hidden="true" />
         <strong>Learning session unavailable</strong>
         <span>{engineState.message}</span>
-        <button className="button primary compact" type="button" onClick={() => { engine.reset(); setView('home') }}>Back to Home</button>
+        <button
+          className="button primary compact"
+          type="button"
+          onClick={() => {
+            engine.reset()
+            setView('home')
+          }}
+        >
+          Back to Home
+        </button>
       </main>
     )
   }
 
-  if (view === 'learning' && engineState.status === 'active' && context?.item) {
+  if (view === 'learning' && engineState.status === 'active' && context) {
+    const { session } = engineState
+    const step = targetStep(context.lesson, session)
     return (
       <LearningScreen
-        lesson={context.lesson}
-        item={context.item}
-        session={engineState.session}
-        settings={settings}
+        lessonTitle={context.lesson.title}
+        sentence={context.sentence}
+        currentTarget={context.target}
+        targetLexeme={context.lexeme}
+        choices={context.choices}
+        sentenceTargetLexemes={context.sentence.targets.flatMap((target) => {
+          const lexeme = context.pack.lexemes.find(
+            (candidate) => candidate.id === target.lexemeId,
+          )
+          return lexeme ? [lexeme] : []
+        })}
+        solvedTargetIds={session.solvedTargetIds}
+        currentStep={step.current}
+        totalSteps={step.total}
+        mode={session.learningMode}
+        activity={session.exerciseMode}
+        feedback={feedbackForSession(session)}
+        selectedChoiceLexemeId={
+          session.exerciseMode !== 'fill-words'
+            ? (session.lastEvaluation?.response ?? null)
+            : null
+        }
+        wrongChoiceLexemeIds={
+          session.wrongChoiceIdsByOccurrenceKey[
+            createTargetOccurrenceKey(
+              session.currentSentenceId,
+              session.currentTargetId,
+            )
+          ] ?? []
+        }
+        sentenceComplete={session.phase === 'sentence-complete'}
         speechSupported={speechSupported}
         speaking={speaking}
+        autoAdvance={settings.autoAdvance}
+        speechRate={settings.speechRate}
+        slowerSpeechRate={getSlowerSpeechRate(settings.speechRate)}
         onPause={pauseSession}
-        onSubmit={submitAnswer}
-        onSkip={() => engine.skip()}
-        onAdvance={() => engine.advance()}
-        onSpeak={(text) => speak(text, settings.speechRate)}
-        onStopSpeaking={stopSpeaking}
+        onRestartSentence={() => engine.restartSentence()}
+        onModeChange={setLearningMode}
+        onAutoAdvanceChange={(autoAdvance) =>
+          updateSettings({ ...settings, autoAdvance })
+        }
         onSpeechRateChange={(speechRate) =>
           updateSettings({ ...settings, speechRate })
+        }
+        onEndSession={endSession}
+        onSubmitChoice={(choiceId) =>
+          submitAnswer({ kind: 'choice', choiceId })
+        }
+        onSubmitFill={(value) => submitAnswer({ kind: 'text', value })}
+        onContinue={() => engine.advance()}
+        onListen={() => speak(context.sentence.speechText, settings.speechRate)}
+        onReplaySlower={() =>
+          speak(context.sentence.speechText, getSlowerSpeechRate(settings.speechRate))
         }
       />
     )
   }
 
   if (view === 'pause' && engineState.status === 'paused' && context) {
-    const completed = engineState.session.currentIndex +
-      (engineState.session.phase === 'feedback' ? 1 : 0)
+    const step = targetStep(context.lesson, engineState.session)
+    const completed =
+      step.current - (engineState.session.phase === 'question' ? 1 : 0)
     return (
       <PauseScreen
         lessonTitle={context.lesson.title}
         completed={completed}
-        total={engineState.session.itemQueue.length}
+        total={step.total}
         onResume={resumeSession}
         onHome={() => setView('home')}
       />

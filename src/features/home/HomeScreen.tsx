@@ -19,6 +19,27 @@ import type {
   LearnerProgress,
 } from '../../persistence/index.ts'
 
+const learningModeOrder: readonly AppSettings['learningMode'][] = [
+  'auto',
+  'word-choice',
+  'fill-words',
+  'listening-choice',
+]
+
+function nextLearningMode(
+  current: AppSettings['learningMode'],
+): AppSettings['learningMode'] {
+  const index = learningModeOrder.indexOf(current)
+  return learningModeOrder[(index + 1) % learningModeOrder.length] ?? 'auto'
+}
+
+function learningModeLabel(mode: AppSettings['learningMode']): string {
+  if (mode === 'auto') return 'Auto · adapts to mastery'
+  if (mode === 'word-choice') return 'Word Choice'
+  if (mode === 'fill-words') return 'Fill Words'
+  return 'Listening Choice'
+}
+
 interface HomeScreenProps {
   readonly packs: readonly LessonPack[]
   readonly progress: LearnerProgress
@@ -45,7 +66,7 @@ export function HomeScreen({
   onSettingsChange,
 }: HomeScreenProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const schedules = Object.values(progress.schedulesByReviewKey)
+  const schedules = Object.values(progress.schedulesByLexemeReviewKey)
   const now = Date.now()
   const dueCount = schedules.filter(
     (schedule) => new Date(schedule.dueAt).getTime() <= now,
@@ -90,17 +111,22 @@ export function HomeScreen({
 
         <div className="quick-settings" aria-label="Learning preferences">
           <button
-            className={`setting-toggle ${settings.autoMode ? 'is-active' : ''}`}
+            className={`setting-toggle ${settings.learningMode === 'auto' ? 'is-active' : ''}`}
             type="button"
-            aria-pressed={settings.autoMode}
+            aria-label={`Learning mode: ${learningModeLabel(settings.learningMode)}. Activate to choose the next mode.`}
             onClick={() =>
-              onSettingsChange({ ...settings, autoMode: !settings.autoMode })
+              onSettingsChange({
+                ...settings,
+                learningMode: nextLearningMode(settings.learningMode),
+              })
             }
           >
             <Zap size={19} aria-hidden="true" />
             <span>
-              <strong>Auto learning</strong>
-              <small>{settings.autoMode ? 'Auto-advance on' : 'Study at your pace'}</small>
+              <strong>Learning mode</strong>
+              <small>
+                {learningModeLabel(settings.learningMode)}
+              </small>
             </span>
           </button>
           <button
@@ -215,7 +241,7 @@ export function HomeScreen({
                       <span>
                         <strong>{lesson.title}</strong>
                         <small>
-                          {lesson.items.length} words · {lesson.estimatedMinutes ?? 5} min
+                          {lesson.sentences.length} contexts · {lesson.estimatedMinutes ?? 5} min
                         </small>
                       </span>
                       <ArrowRight size={18} aria-hidden="true" />

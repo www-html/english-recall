@@ -4,7 +4,9 @@ export type IsoDateTime = string
 export type EntityId = string
 export type LessonPackId = EntityId
 export type LessonId = EntityId
-export type LearningItemId = EntityId
+export type LexemeId = EntityId
+export type SentenceId = EntityId
+export type TargetOccurrenceId = EntityId
 export type SessionId = EntityId
 
 export type Result<T, E> =

@@ -4,13 +4,15 @@
 
 - Install exactly from the lockfile: `npm ci`
 - Start development: `npm run dev`
-- Type-check and production-build: `npm run build`
+- Type-check only: `npm run typecheck`
+- Production build: `npm run build`
 - Run tests once: `npm test`
 - Run tests while developing: `npm run test:watch`
 - Run static lint checks: `npm run lint`
 
-Before handing off a change, run `npm run lint`, `npm test`, and
-`npm run build`. Report any command that was not run or did not pass.
+Before handing off a change, run `npm run lint`, `npm run typecheck`,
+`npm test`, and `npm run build`. Report any command that was not run or did not
+pass.
 
 ## Architecture
 
@@ -27,6 +29,11 @@ Before handing off a change, run `npm run lint`, `npm test`, and
 - Prefer explicit discriminated unions and immutable `readonly` state over
   booleans that can form contradictory states.
 - Keep timestamps as ISO-8601 strings at module and persistence boundaries.
+- Treat `lexemeId` as the mastery/SRS identity. Treat target ids as local to a
+  sentence and use `sentenceId::targetId` when a globally unique occurrence key
+  is required.
+- Keep `learningMode` (exercise selection) independent from `autoAdvance`
+  (navigation timing).
 
 ## Build and test rules
 
@@ -48,5 +55,6 @@ Before handing off a change, run `npm run lint`, `npm test`, and
 - Make the smallest change that satisfies the requested feature.
 - Do not add a router, global state library, backend, analytics, or remote sync
   without an explicit requirement.
-- Preserve backward compatibility for released lesson pack schema versions, or
-  add and test an explicit migration.
+- Preserve backward compatibility for released lesson pack schema versions only
+  when it can be lossless. Otherwise reject the version explicitly and document
+  the authored migration path.

@@ -1,13 +1,15 @@
-import type { LearningItem, LessonPack } from '../domain/lesson-pack.schema.ts'
+import type { LessonPack, Sentence } from '../domain/lesson-pack.schema.ts'
 import type {
   IsoDateTime,
-  LearningItemId,
+  LexemeId,
   LessonId,
   LessonPackId,
   Result,
+  SentenceId,
   Unsubscribe,
 } from '../shared/types.ts'
 import type {
+  LearningMode,
   LearningEngineState,
   LearningSessionSnapshot,
   RecallRating,
@@ -22,9 +24,10 @@ export type LearningResponse =
 export interface StartSessionRequest {
   readonly pack: LessonPack
   readonly lessonId: LessonId
-  readonly schedulesByItemId?: Readonly<
-    Record<LearningItemId, ReviewSchedule>
+  readonly schedulesByLexemeId?: Readonly<
+    Record<LexemeId, ReviewSchedule>
   >
+  readonly learningMode?: LearningMode
   readonly now?: IsoDateTime
 }
 
@@ -36,7 +39,7 @@ export interface RestoreSessionRequest {
 export type LearningEngineErrorCode =
   | 'invalid-state'
   | 'lesson-not-found'
-  | 'item-not-found'
+  | 'target-not-found'
   | 'invalid-response'
   | 'invalid-snapshot'
 
@@ -63,22 +66,26 @@ export interface LearningEngine {
   ): Result<LearningTransition, LearningEngineError>
   skip(): Result<LearningTransition, LearningEngineError>
   advance(): Result<LearningTransition, LearningEngineError>
+  restartSentence(): Result<LearningTransition, LearningEngineError>
+  setLearningMode(
+    mode: LearningMode,
+  ): Result<LearningTransition, LearningEngineError>
   pause(): Result<LearningTransition, LearningEngineError>
   resume(): Result<LearningTransition, LearningEngineError>
   reset(): LearningTransition
   subscribe(listener: (state: LearningEngineState) => void): Unsubscribe
 }
 
-export interface ItemSelectionContext {
+export interface SentenceSelectionContext {
   readonly packId: LessonPackId
   readonly lessonId: LessonId
-  readonly items: readonly LearningItem[]
-  readonly schedulesByItemId: Readonly<Record<LearningItemId, ReviewSchedule>>
+  readonly sentences: readonly Sentence[]
+  readonly schedulesByLexemeId: Readonly<Record<LexemeId, ReviewSchedule>>
   readonly now: IsoDateTime
 }
 
-export interface ItemSelector {
-  select(context: ItemSelectionContext): readonly LearningItemId[]
+export interface SentenceSelector {
+  select(context: SentenceSelectionContext): readonly SentenceId[]
 }
 
 export interface ReviewScheduler {

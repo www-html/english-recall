@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-recall-v1'
+const CACHE_NAME = 'english-recall-v3'
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -8,8 +8,26 @@ const APP_SHELL = [
 ]
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
-  self.skipWaiting()
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const responses = await Promise.all(
+        APP_SHELL.map(async (url) => [url, await fetch(url)]),
+      )
+      await Promise.all(
+        responses.map(([url, response]) => cache.put(url, response.clone())),
+      )
+
+      const indexResponse = responses.find(([url]) => url === '/index.html')?.[1]
+      if (!indexResponse) return
+      const indexHtml = await indexResponse.text()
+      const assetUrls = Array.from(
+        indexHtml.matchAll(/(?:src|href)="(\/assets\/[^"?#]+)"/g),
+        (match) => match[1],
+      )
+      await cache.addAll(assetUrls)
+      await self.skipWaiting()
+    }),
+  )
 })
 
 self.addEventListener('activate', (event) => {
@@ -33,9 +51,10 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
-        .then((response) => {
+        .then(async (response) => {
           const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy))
+          const cache = await caches.open(CACHE_NAME)
+          await cache.put('/index.html', copy)
           return response
         })
         .catch(() => caches.match('/index.html')),
@@ -47,10 +66,11 @@ self.addEventListener('fetch', (event) => {
     caches.match(request).then((cached) => {
       if (cached) return cached
 
-      return fetch(request).then((response) => {
+      return fetch(request).then(async (response) => {
         if (response.ok) {
           const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          const cache = await caches.open(CACHE_NAME)
+          await cache.put(request, copy)
         }
         return response
       })

@@ -1,11 +1,12 @@
 import type { LessonPack } from '../domain/lesson-pack.schema.ts'
 import type {
   LearningSessionSnapshot,
+  LearningMode,
   ReviewSchedule,
 } from '../learning-engine/index.ts'
 import type {
   IsoDateTime,
-  LearningItemId,
+  LexemeId,
   LessonPackId,
   Result,
 } from '../shared/types.ts'
@@ -15,11 +16,12 @@ export interface LessonPackSummary {
   readonly version: string
   readonly title: string
   readonly lessonCount: number
-  readonly itemCount: number
+  readonly targetCount: number
 }
 
 export interface LearnerProgress {
-  readonly schedulesByReviewKey: Readonly<Record<string, ReviewSchedule>>
+  /** Keys are produced by createReviewKey(packId, lexemeId). */
+  readonly schedulesByLexemeReviewKey: Readonly<Record<string, ReviewSchedule>>
   readonly sessionsCompleted: number
   readonly totalAnswers: number
   readonly correctAnswers: number
@@ -27,7 +29,8 @@ export interface LearnerProgress {
 }
 
 export interface AppSettings {
-  readonly autoMode: boolean
+  readonly learningMode: LearningMode
+  readonly autoAdvance: boolean
   readonly audioEnabled: boolean
   readonly speechRate: number
 }
@@ -77,14 +80,14 @@ export interface PersistenceProvider {
 
 export function createReviewKey(
   packId: LessonPackId,
-  itemId: LearningItemId,
+  lexemeId: LexemeId,
 ): string {
-  return `${packId}::${itemId}`
+  return `${packId}::${lexemeId}`
 }
 
 export function createInitialProgress(): LearnerProgress {
   return {
-    schedulesByReviewKey: {},
+    schedulesByLexemeReviewKey: {},
     sessionsCompleted: 0,
     totalAnswers: 0,
     correctAnswers: 0,
@@ -92,7 +95,8 @@ export function createInitialProgress(): LearnerProgress {
 }
 
 export const defaultAppSettings: AppSettings = {
-  autoMode: false,
+  learningMode: 'auto',
+  autoAdvance: false,
   audioEnabled: true,
   speechRate: 0.9,
 }

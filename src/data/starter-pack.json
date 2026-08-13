@@ -1,240 +1,285 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "english-recall-starter",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "title": "English Recall Starter",
-  "description": "18 từ và cụm từ thiết yếu cho giao tiếp, công việc và du lịch.",
+  "description": "Luyện nhớ từ tiếng Anh qua nhiều ngữ cảnh câu ngắn.",
   "sourceLanguage": "vi",
   "targetLanguage": "en-US",
+  "lexemes": [
+    {
+      "id": "usually.adv.01",
+      "text": "usually",
+      "spokenText": "usually",
+      "partOfSpeech": "adverb",
+      "meaningVi": "thường",
+      "pronunciation": { "ipa": "/ˈjuːʒuəli/" }
+    },
+    {
+      "id": "always.adv.01",
+      "text": "always",
+      "partOfSpeech": "adverb",
+      "meaningVi": "luôn luôn"
+    },
+    {
+      "id": "sometimes.adv.01",
+      "text": "sometimes",
+      "partOfSpeech": "adverb",
+      "meaningVi": "thỉnh thoảng"
+    },
+    {
+      "id": "normally.adv.01",
+      "text": "normally",
+      "partOfSpeech": "adverb",
+      "meaningVi": "thông thường"
+    },
+    {
+      "id": "coffee.noun.01",
+      "text": "coffee",
+      "partOfSpeech": "noun",
+      "meaningVi": "cà phê"
+    },
+    {
+      "id": "tea.noun.01",
+      "text": "tea",
+      "partOfSpeech": "noun",
+      "meaningVi": "trà"
+    },
+    {
+      "id": "water.noun.01",
+      "text": "water",
+      "partOfSpeech": "noun",
+      "meaningVi": "nước"
+    },
+    {
+      "id": "lunch.noun.01",
+      "text": "lunch",
+      "partOfSpeech": "noun",
+      "meaningVi": "bữa trưa"
+    },
+    {
+      "id": "clarify.verb.01",
+      "text": "clarify",
+      "partOfSpeech": "verb",
+      "meaningVi": "làm rõ"
+    },
+    {
+      "id": "improve.verb.01",
+      "text": "improve",
+      "partOfSpeech": "verb",
+      "meaningVi": "cải thiện"
+    },
+    {
+      "id": "delay.verb.01",
+      "text": "delay",
+      "partOfSpeech": "verb",
+      "meaningVi": "trì hoãn"
+    },
+    {
+      "id": "ignore.verb.01",
+      "text": "ignore",
+      "partOfSpeech": "verb",
+      "meaningVi": "phớt lờ"
+    },
+    {
+      "id": "deadline.noun.01",
+      "text": "deadline",
+      "partOfSpeech": "noun",
+      "meaningVi": "hạn chót"
+    },
+    {
+      "id": "schedule.noun.01",
+      "text": "schedule",
+      "partOfSpeech": "noun",
+      "meaningVi": "lịch trình"
+    },
+    {
+      "id": "feedback.noun.01",
+      "text": "feedback",
+      "partOfSpeech": "noun",
+      "meaningVi": "phản hồi"
+    },
+    {
+      "id": "meeting.noun.01",
+      "text": "meeting",
+      "partOfSpeech": "noun",
+      "meaningVi": "cuộc họp"
+    }
+  ],
   "lessons": [
     {
-      "id": "daily-communication",
-      "title": "Daily communication",
-      "summary": "Từ vựng thường dùng trong hội thoại hằng ngày.",
-      "estimatedMinutes": 5,
-      "items": [
+      "id": "daily-routines",
+      "title": "Daily routines",
+      "summary": "Ghi nhớ trạng từ tần suất trong nhiều ngữ cảnh.",
+      "estimatedMinutes": 4,
+      "sentences": [
         {
-          "id": "daily-confident-choice",
-          "kind": "multiple-choice",
-          "prompt": "Từ nào có nghĩa là “tự tin”?",
-          "audioText": "confident",
-          "choices": [
-            { "id": "a", "text": "confident" },
-            { "id": "b", "text": "careless" },
-            { "id": "c", "text": "silent" },
-            { "id": "d", "text": "ordinary" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["daily", "adjective"]
+          "id": "daily-usually-coffee",
+          "displayText": "I usually drink coffee in the morning.",
+          "speechText": "I usually drink coffee in the morning.",
+          "translationVi": "Tôi thường uống cà phê vào buổi sáng.",
+          "level": "A1",
+          "topic": "daily-routine",
+          "explanation": "Usually đứng trước động từ thường để diễn tả tần suất.",
+          "targets": [
+            {
+              "id": "usually",
+              "lexemeId": "usually.adv.01",
+              "start": 2,
+              "end": 9,
+              "distractorLexemeIds": [
+                "always.adv.01",
+                "sometimes.adv.01",
+                "normally.adv.01"
+              ]
+            },
+            {
+              "id": "coffee",
+              "lexemeId": "coffee.noun.01",
+              "start": 16,
+              "end": 22,
+              "distractorLexemeIds": [
+                "tea.noun.01",
+                "water.noun.01",
+                "lunch.noun.01"
+              ]
+            }
+          ]
         },
         {
-          "id": "daily-agree-fill",
-          "kind": "typing",
-          "prompt": "Điền một từ: Tôi đồng ý → I ___",
-          "audioText": "I agree",
-          "acceptedAnswers": ["agree"],
-          "caseSensitive": false,
-          "tags": ["daily", "verb"]
+          "id": "daily-usually-home",
+          "displayText": "She usually gets home at six.",
+          "speechText": "She usually gets home at six.",
+          "translationVi": "Cô ấy thường về nhà lúc sáu giờ.",
+          "level": "A1",
+          "topic": "daily-routine",
+          "targets": [
+            {
+              "id": "usually",
+              "lexemeId": "usually.adv.01",
+              "start": 4,
+              "end": 11,
+              "distractorLexemeIds": [
+                "always.adv.01",
+                "sometimes.adv.01",
+                "normally.adv.01"
+              ]
+            }
+          ]
         },
         {
-          "id": "daily-appointment-choice",
-          "kind": "multiple-choice",
-          "prompt": "“Appointment” được dùng khi nói về điều gì?",
-          "audioText": "appointment",
-          "choices": [
-            { "id": "a", "text": "Một cuộc hẹn" },
-            { "id": "b", "text": "Một lời xin lỗi" },
-            { "id": "c", "text": "Một bữa ăn" },
-            { "id": "d", "text": "Một kỳ nghỉ" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["daily", "noun"]
+          "id": "daily-usually-fridays",
+          "displayText": "We usually meet on Fridays.",
+          "speechText": "We usually meet on Fridays.",
+          "translationVi": "Chúng tôi thường gặp nhau vào thứ Sáu.",
+          "level": "A1",
+          "topic": "daily-routine",
+          "targets": [
+            {
+              "id": "usually",
+              "lexemeId": "usually.adv.01",
+              "start": 3,
+              "end": 10,
+              "distractorLexemeIds": [
+                "always.adv.01",
+                "sometimes.adv.01",
+                "normally.adv.01"
+              ]
+            }
+          ]
         },
         {
-          "id": "daily-available-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Bạn có rảnh không? → Are you ___?",
-          "audioText": "Are you available?",
-          "acceptedAnswers": ["available"],
-          "caseSensitive": false,
-          "tags": ["daily", "adjective"]
-        },
-        {
-          "id": "daily-instead-choice",
-          "kind": "multiple-choice",
-          "prompt": "Chọn nghĩa đúng của “instead”.",
-          "audioText": "instead",
-          "choices": [
-            { "id": "a", "text": "Thay vào đó" },
-            { "id": "b", "text": "Ngay lập tức" },
-            { "id": "c", "text": "Thỉnh thoảng" },
-            { "id": "d", "text": "Ở bên ngoài" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["daily", "adverb"]
-        },
-        {
-          "id": "daily-usually-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Tôi thường đi bộ → I ___ walk",
-          "audioText": "I usually walk",
-          "acceptedAnswers": ["usually"],
-          "caseSensitive": false,
-          "tags": ["daily", "frequency"]
+          "id": "daily-usually-hour",
+          "displayText": "It usually takes an hour.",
+          "speechText": "It usually takes an hour.",
+          "translationVi": "Việc đó thường mất một giờ.",
+          "level": "A1",
+          "topic": "daily-routine",
+          "targets": [
+            {
+              "id": "usually",
+              "lexemeId": "usually.adv.01",
+              "start": 3,
+              "end": 10,
+              "distractorLexemeIds": [
+                "always.adv.01",
+                "sometimes.adv.01",
+                "normally.adv.01"
+              ]
+            }
+          ]
         }
       ]
     },
     {
       "id": "work-essentials",
       "title": "Work essentials",
-      "summary": "Từ vựng để trao đổi rõ ràng và làm việc hiệu quả.",
-      "estimatedMinutes": 5,
-      "items": [
+      "summary": "Nhớ từ công việc trong câu hoàn chỉnh.",
+      "estimatedMinutes": 3,
+      "sentences": [
         {
-          "id": "work-deadline-choice",
-          "kind": "multiple-choice",
-          "prompt": "“Deadline” là gì?",
-          "audioText": "deadline",
-          "choices": [
-            { "id": "a", "text": "Hạn chót" },
-            { "id": "b", "text": "Cuộc họp" },
-            { "id": "c", "text": "Tiền thưởng" },
-            { "id": "d", "text": "Bản nháp" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["work", "noun"]
+          "id": "work-clarify-deadline",
+          "displayText": "Please clarify the deadline before noon.",
+          "speechText": "Please clarify the deadline before noon.",
+          "translationVi": "Vui lòng làm rõ hạn chót trước buổi trưa.",
+          "level": "A2",
+          "topic": "work",
+          "targets": [
+            {
+              "id": "clarify",
+              "lexemeId": "clarify.verb.01",
+              "start": 7,
+              "end": 14,
+              "distractorLexemeIds": [
+                "improve.verb.01",
+                "delay.verb.01",
+                "ignore.verb.01"
+              ]
+            },
+            {
+              "id": "deadline",
+              "lexemeId": "deadline.noun.01",
+              "start": 19,
+              "end": 27,
+              "distractorLexemeIds": [
+                "schedule.noun.01",
+                "feedback.noun.01",
+                "meeting.noun.01"
+              ]
+            }
+          ]
         },
         {
-          "id": "work-feedback-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Cảm ơn phản hồi của bạn → Thanks for your ___",
-          "audioText": "Thanks for your feedback",
-          "acceptedAnswers": ["feedback"],
-          "caseSensitive": false,
-          "tags": ["work", "noun"]
-        },
-        {
-          "id": "work-clarify-choice",
-          "kind": "multiple-choice",
-          "prompt": "Động từ nào nghĩa là “làm rõ”?",
-          "audioText": "clarify",
-          "choices": [
-            { "id": "a", "text": "clarify" },
-            { "id": "b", "text": "delay" },
-            { "id": "c", "text": "ignore" },
-            { "id": "d", "text": "replace" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["work", "verb"]
-        },
-        {
-          "id": "work-improve-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Chúng ta có thể cải thiện → We can ___",
-          "audioText": "We can improve",
-          "acceptedAnswers": ["improve"],
-          "caseSensitive": false,
-          "tags": ["work", "verb"]
-        },
-        {
-          "id": "work-reliable-choice",
-          "kind": "multiple-choice",
-          "prompt": "Một người “reliable” là người như thế nào?",
-          "audioText": "reliable",
-          "choices": [
-            { "id": "a", "text": "Đáng tin cậy" },
-            { "id": "b", "text": "Thiếu kiên nhẫn" },
-            { "id": "c", "text": "Rất sáng tạo" },
-            { "id": "d", "text": "Khó hiểu" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["work", "adjective"]
-        },
-        {
-          "id": "work-schedule-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Kiểm tra lịch trình → Check the ___",
-          "audioText": "Check the schedule",
-          "acceptedAnswers": ["schedule"],
-          "caseSensitive": false,
-          "tags": ["work", "noun"]
-        }
-      ]
-    },
-    {
-      "id": "travel-ready",
-      "title": "Travel ready",
-      "summary": "Từ vựng cần thiết tại sân bay và khi di chuyển.",
-      "estimatedMinutes": 5,
-      "items": [
-        {
-          "id": "travel-luggage-choice",
-          "kind": "multiple-choice",
-          "prompt": "“Luggage” có nghĩa là gì?",
-          "audioText": "luggage",
-          "choices": [
-            { "id": "a", "text": "Hành lý" },
-            { "id": "b", "text": "Hộ chiếu" },
-            { "id": "c", "text": "Vé máy bay" },
-            { "id": "d", "text": "Nhà ga" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["travel", "noun"]
-        },
-        {
-          "id": "travel-departure-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Giờ khởi hành → ___ time",
-          "audioText": "departure time",
-          "acceptedAnswers": ["departure"],
-          "caseSensitive": false,
-          "tags": ["travel", "noun"]
-        },
-        {
-          "id": "travel-crowded-choice",
-          "kind": "multiple-choice",
-          "prompt": "“Crowded” mô tả một nơi như thế nào?",
-          "audioText": "crowded",
-          "choices": [
-            { "id": "a", "text": "Đông đúc" },
-            { "id": "b", "text": "Yên tĩnh" },
-            { "id": "c", "text": "Xa xôi" },
-            { "id": "d", "text": "Sạch sẽ" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["travel", "adjective"]
-        },
-        {
-          "id": "travel-reservation-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Tôi có một đặt chỗ → I have a ___",
-          "audioText": "I have a reservation",
-          "acceptedAnswers": ["reservation", "booking"],
-          "caseSensitive": false,
-          "tags": ["travel", "noun"]
-        },
-        {
-          "id": "travel-nearby-choice",
-          "kind": "multiple-choice",
-          "prompt": "Chọn nghĩa đúng của “nearby”.",
-          "audioText": "nearby",
-          "choices": [
-            { "id": "a", "text": "Gần đây" },
-            { "id": "b", "text": "Phía trên" },
-            { "id": "c", "text": "Ở nước ngoài" },
-            { "id": "d", "text": "Đúng giờ" }
-          ],
-          "correctChoiceId": "a",
-          "tags": ["travel", "adverb"]
-        },
-        {
-          "id": "travel-directions-fill",
-          "kind": "typing",
-          "prompt": "Điền từ: Tôi cần chỉ đường → I need ___",
-          "audioText": "I need directions",
-          "acceptedAnswers": ["directions"],
-          "caseSensitive": false,
-          "tags": ["travel", "noun"]
+          "id": "work-improve-schedule",
+          "displayText": "Can we improve the schedule today?",
+          "speechText": "Can we improve the schedule today?",
+          "translationVi": "Chúng ta có thể cải thiện lịch trình hôm nay không?",
+          "level": "A2",
+          "topic": "work",
+          "targets": [
+            {
+              "id": "improve",
+              "lexemeId": "improve.verb.01",
+              "start": 7,
+              "end": 14,
+              "distractorLexemeIds": [
+                "clarify.verb.01",
+                "delay.verb.01",
+                "ignore.verb.01"
+              ]
+            },
+            {
+              "id": "schedule",
+              "lexemeId": "schedule.noun.01",
+              "start": 19,
+              "end": 27,
+              "distractorLexemeIds": [
+                "deadline.noun.01",
+                "feedback.noun.01",
+                "meeting.noun.01"
+              ]
+            }
+          ]
         }
       ]
     }

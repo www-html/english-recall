@@ -15,8 +15,7 @@ shared ─────────────────> no application depen
 
 The React layer may coordinate the engine and repositories, but domain and
 engine modules must not import React. Persistence contracts describe behavior;
-browser storage, IndexedDB, remote sync, and test fakes belong in future
-adapter modules.
+IndexedDB and test fakes remain adapter concerns.
 
 ## Source structure
 
@@ -49,20 +48,30 @@ semantic `version`. A future incompatible data shape requires a new schema
 version and an explicit migration at the import boundary. Unknown fields are
 rejected so misspelled authoring fields fail early.
 
-Supported item kinds in schema version 1 are `flashcard`, `typing`, and
-`multiple-choice`. `typing` powers Fill Words and `multiple-choice` powers Word
-Choice. New kinds require schema, engine response, tests, and pack documentation
-changes together.
+Schema version 2 separates reusable `lexemes` from `sentences`. A sentence owns
+one to four target occurrences. A target id is local to its sentence; runtime
+maps therefore use a composite `sentenceId::targetId` occurrence key. Every
+target stores an exact UTF-16 `[start, end)` span and exactly three distractor
+lexeme ids. The parser rejects invalid references, duplicate ids, mismatched or
+overlapping spans, and unknown fields.
+
+Mastery and SRS schedules are keyed by `packId::lexemeId`. A lexeme may appear
+in many sentence contexts without fragmenting its learning history. Schema
+version 1 generic items are rejected rather than guessed into a lossy context
+model; migration requires an explicit authored mapping.
 
 ## Runtime flow
 
 1. The app parses bundled or imported JSON with Zod.
 2. The composition root loads packs, progress, settings, and any active session
    through `PersistenceProvider`.
-3. `DefaultLearningEngine` owns question, feedback, pause, and completion
-   transitions. React renders the current state and sends typed commands.
-4. `BasicReviewScheduler` updates due date, interval, ease, repetitions, and
-   lapses after every answer.
+3. `DefaultLearningEngine` owns question, target feedback, sentence completion,
+   pause, resume, restart, and final completion transitions. Wrong answers stay
+   on the current target and never expose the expected answer.
+4. `BasicReviewScheduler` updates lexeme due date, interval, ease, repetitions,
+   and lapses after every answer. Auto learning selects Word Choice for weak,
+   Fill Words for developing, and Listening Choice for established mastery. It
+   is independent from the `autoAdvance` setting.
 5. The app writes each session snapshot and schedule update to IndexedDB. A
    completed session clears the resumable snapshot and updates aggregate stats.
 6. The service worker caches the app shell and same-origin runtime assets for

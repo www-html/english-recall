@@ -9,12 +9,15 @@ and learning progress in IndexedDB.
 - Home, Learning, Pause, and Summary screens
 - Word Choice with number shortcuts `1`–`4`
 - Fill Words with `Space` to submit and `Esc` to clear
-- Optional Auto learning with spoken prompts and auto-advance
+- Listening Choice with automatic sentence audio and `1`–`4` shortcuts
+- Auto learning mode that selects Word Choice, Fill Words, or Listening Choice
+  from lexeme mastery
+- Optional sentence auto-advance, configured separately from learning mode
 - English speech controls with adjustable playback rate
 - Versioned JSON lesson packs validated with Zod
 - Basic spaced repetition, mastery, and due-review tracking
 - Offline-capable PWA shell and local-only IndexedDB persistence
-- Built-in starter pack with 18 exercises across three lessons
+- Built-in starter pack with 16 reusable lexemes and 6 sentence contexts
 
 ## Run
 
@@ -42,9 +45,15 @@ npm run build
 ## JSON lesson packs
 
 Use [src/data/starter-pack.json](src/data/starter-pack.json) as the canonical
-schema version 1 example. Packs can contain `multiple-choice`, `typing`, and
-`flashcard` items. Every pack, lesson, item, and choice needs a stable id;
-learning item ids must be unique across the pack.
+schema version 2 example. Packs define reusable `lexemes`, then lessons contain
+sentence contexts with one to four target occurrences. Each target points to a
+lexeme, an exact `[start, end)` span in `displayText`, and exactly three
+distractor lexemes. Mastery and SRS are keyed by `lexemeId`, so the same word is
+learned across multiple contexts.
+
+Schema version 1 generic quiz packs are intentionally rejected: their items do
+not contain enough sentence semantics for a lossless automatic migration.
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and data
-flow.
+flow. See [docs/them-du-lieu-hoc.md](docs/them-du-lieu-hoc.md) for a Vietnamese
+step-by-step guide to creating and importing a lesson database.

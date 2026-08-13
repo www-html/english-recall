@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
+export function getSlowerSpeechRate(rate: number): number {
+  return Math.max(0.5, Number((rate * 0.6).toFixed(2)))
+}
+
 export function useSpeech() {
   const [speaking, setSpeaking] = useState(false)
   const supported =

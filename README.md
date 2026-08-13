@@ -17,7 +17,7 @@ and learning progress in IndexedDB.
 - Versioned JSON lesson packs validated with Zod
 - Basic spaced repetition, mastery, and due-review tracking
 - Offline-capable PWA shell and local-only IndexedDB persistence
-- Built-in starter pack with 16 reusable lexemes and 6 sentence contexts
+- Built-in starter pack with reusable lexemes and inflected sentence contexts
 
 ## Run
 
@@ -45,11 +45,13 @@ npm run build
 ## JSON lesson packs
 
 Use [src/data/starter-pack.json](src/data/starter-pack.json) as the canonical
-schema version 2 example. Packs define reusable `lexemes`, then lessons contain
+schema version 3 example. Packs define reusable lemma-level `lexemes`, then
+lessons contain
 sentence contexts with one to four target occurrences. Each target points to a
-lexeme, an exact `[start, end)` span in `displayText`, and exactly three
-distractor lexemes. Mastery and SRS are keyed by `lexemeId`, so the same word is
-learned across multiple contexts.
+lexeme, stores its contextual `surfaceText`, an exact `[start, end)` span in
+`displayText`, and exactly three distractors with contextual surface forms.
+Mastery and SRS are keyed by `lexemeId`, so forms such as `go` and `went` share
+one learning history. Valid schema v2 packs are upgraded losslessly on import.
 
 Schema version 1 generic quiz packs are intentionally rejected: their items do
 not contain enough sentence semantics for a lossless automatic migration.

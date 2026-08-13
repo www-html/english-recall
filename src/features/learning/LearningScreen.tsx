@@ -32,13 +32,20 @@ export type LearningMode =
 export type LearningActivity = Exclude<LearningMode, 'auto'>
 export type LearningFeedback = 'idle' | 'incorrect' | 'correct'
 
+export interface ChoiceOption {
+  readonly lexemeId: string
+  readonly surfaceText: string
+}
+
 export interface LearningScreenProps {
   readonly lessonTitle: string
   readonly sentence: Sentence
   readonly currentTarget: TargetOccurrence
   readonly targetLexeme: Lexeme
-  readonly choices: readonly Lexeme[]
+  readonly choices: readonly ChoiceOption[]
   readonly sentenceTargetLexemes: readonly Lexeme[]
+  /** All due/new targets selected for this sentence, including future ones. */
+  readonly activeTargetIds: readonly string[]
   readonly solvedTargetIds: readonly string[]
   /** One-based position in the full learning session. */
   readonly currentStep: number
@@ -222,6 +229,7 @@ function LearningMenu({
 interface SentenceLineProps {
   readonly sentence: Sentence
   readonly currentTarget: TargetOccurrence
+  readonly activeTargetIds: ReadonlySet<string>
   readonly solvedTargetIds: ReadonlySet<string>
   readonly activity: LearningActivity
   readonly feedback: LearningFeedback
@@ -236,6 +244,7 @@ interface SentenceLineProps {
 function SentenceLine({
   sentence,
   currentTarget,
+  activeTargetIds,
   solvedTargetIds,
   activity,
   feedback,
@@ -258,7 +267,9 @@ function SentenceLine({
     const targetText = sentence.displayText.slice(target.start, target.end)
     const isCurrent = target.id === currentTarget.id
 
-    if (sentenceComplete || solvedTargetIds.has(target.id)) {
+    const isActive = activeTargetIds.has(target.id)
+
+    if (sentenceComplete || solvedTargetIds.has(target.id) || !isActive) {
       parts.push(
         <span
           className={solvedTargetIds.has(target.id) ? 'sentence-word is-solved' : 'sentence-word'}
@@ -322,6 +333,7 @@ export function LearningScreen({
   targetLexeme,
   choices,
   sentenceTargetLexemes,
+  activeTargetIds,
   solvedTargetIds,
   currentStep,
   totalSteps,
@@ -352,17 +364,19 @@ export function LearningScreen({
   const [editedAfterAttempt, setEditedAfterAttempt] = useState(false)
   const [shakingChoiceId, setShakingChoiceId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [endConfirmationOpen, setEndConfirmationOpen] = useState(false)
   const shakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const answer = sentence.displayText.slice(currentTarget.start, currentTarget.end)
+  const answer = choices.find(
+    (choice) => choice.lexemeId === targetLexeme.id,
+  )?.surfaceText ?? currentTarget.surfaceText
   const firstLetter = answer.charAt(0)
   const visibleFeedback = editedAfterAttempt && feedback === 'incorrect' ? 'idle' : feedback
   const progress = totalSteps > 0
     ? Math.min(100, Math.max(0, (currentStep / totalSteps) * 100))
     : 0
-  const activeTargetPosition = sentence.targets.findIndex(
-    (target) => target.id === currentTarget.id,
-  ) + 1
+  const activeTargetPosition = activeTargetIds.indexOf(currentTarget.id) + 1
   const solvedTargets = useMemo(() => new Set(solvedTargetIds), [solvedTargetIds])
+  const activeTargets = useMemo(() => new Set(activeTargetIds), [activeTargetIds])
   const wrongChoices = useMemo(
     () => new Set(wrongChoiceLexemeIds),
     [wrongChoiceLexemeIds],
@@ -411,12 +425,12 @@ export function LearningScreen({
       if (choiceIndex < 0 || choiceIndex > 3 || !choice) return
 
       event.preventDefault()
-      if (choice.id !== targetLexeme.id) {
-        setShakingChoiceId(choice.id)
+      if (choice.lexemeId !== targetLexeme.id) {
+        setShakingChoiceId(choice.lexemeId)
         if (shakeTimer.current) clearTimeout(shakeTimer.current)
         shakeTimer.current = setTimeout(() => setShakingChoiceId(null), 440)
       }
-      onSubmitChoice(choice.id)
+      onSubmitChoice(choice.lexemeId)
     }
 
     window.addEventListener('keydown', handleShortcut)
@@ -475,7 +489,7 @@ export function LearningScreen({
           onRestartSentence={onRestartSentence}
           onModeChange={onModeChange}
           onOpenSessionSettings={() => setSettingsOpen(true)}
-          onEndSession={onEndSession}
+          onEndSession={() => setEndConfirmationOpen(true)}
         />
       </header>
 
@@ -534,6 +548,41 @@ export function LearningScreen({
         </div>
       ) : null}
 
+      {endConfirmationOpen ? (
+        <div
+          className="session-settings-backdrop"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setEndConfirmationOpen(false)
+          }}
+        >
+          <section
+            className="end-session-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="end-session-title"
+            aria-describedby="end-session-description"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setEndConfirmationOpen(false)
+            }}
+          >
+            <span className="end-session-icon" aria-hidden="true"><LogOut size={21} /></span>
+            <h2 id="end-session-title">End this session?</h2>
+            <p id="end-session-description">
+              Completed progress stays saved. The unfinished sentence will not count as completed.
+            </p>
+            <div className="end-session-actions">
+              <button autoFocus className="button secondary" type="button" onClick={() => setEndConfirmationOpen(false)}>
+                Keep learning
+              </button>
+              <button className="button danger" type="button" onClick={onEndSession}>
+                End session
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <section className="learning-stage" aria-labelledby="question-label">
         <div className="question-row">
           <span className="question-kicker" id="question-label">
@@ -582,6 +631,7 @@ export function LearningScreen({
             <SentenceLine
               sentence={sentence}
               currentTarget={currentTarget}
+              activeTargetIds={activeTargets}
               solvedTargetIds={solvedTargets}
               activity={activity}
               feedback={visibleFeedback}
@@ -625,19 +675,19 @@ export function LearningScreen({
         {!sentenceComplete && isChoiceActivity ? (
           <div className="sentence-choices" aria-label="Answer choices">
             {choices.length === 4 ? choices.map((choice, index) => {
-              const selectedWrong = wrongChoices.has(choice.id)
-              const selectedCorrect = feedback === 'correct' && selectedChoiceLexemeId === choice.id
+              const selectedWrong = wrongChoices.has(choice.lexemeId)
+              const selectedCorrect = feedback === 'correct' && selectedChoiceLexemeId === choice.lexemeId
               return (
                 <button
-                  className={`sentence-choice ${selectedWrong ? 'is-wrong' : ''} ${selectedCorrect ? 'is-correct' : ''} ${shakingChoiceId === choice.id ? 'is-shaking' : ''}`}
+                  className={`sentence-choice ${selectedWrong ? 'is-wrong' : ''} ${selectedCorrect ? 'is-correct' : ''} ${shakingChoiceId === choice.lexemeId ? 'is-shaking' : ''}`}
                   type="button"
-                  key={choice.id}
+                  key={choice.lexemeId}
                   disabled={feedback === 'correct'}
                   aria-pressed={selectedWrong || selectedCorrect}
-                  onClick={() => choose(choice.id)}
+                  onClick={() => choose(choice.lexemeId)}
                 >
                   <kbd>{index + 1}</kbd>
-                  <span>{choice.text}</span>
+                  <span>{choice.surfaceText}</span>
                   {selectedCorrect ? <Check size={18} aria-hidden="true" /> : null}
                 </button>
               )
@@ -668,7 +718,7 @@ export function LearningScreen({
             <dl className="lexeme-details">
               {sentenceTargetLexemes.map((lexeme) => (
                 <div key={lexeme.id}>
-                  <dt>{lexeme.text} · {lexeme.partOfSpeech}</dt>
+                  <dt>{lexeme.lemma} · {lexeme.partOfSpeech}</dt>
                   <dd lang="vi">{lexeme.meaningVi}</dd>
                 </div>
               ))}
@@ -687,7 +737,7 @@ export function LearningScreen({
 
         <footer className="learning-stage-footer">
           <span>
-            Target {Math.max(1, activeTargetPosition)} of {sentence.targets.length}
+            Target {Math.max(1, activeTargetPosition)} of {activeTargetIds.length}
           </span>
           <span><kbd>↑</kbd> listen <kbd>↓</kbd> slower</span>
         </footer>

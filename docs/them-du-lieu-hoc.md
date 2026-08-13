@@ -1,7 +1,7 @@
 # Hướng dẫn thêm dữ liệu học
 
 English Recall không dùng SQL hay backend. “Database bài học” là một file JSON
-theo schema version 2. Sau khi import, ứng dụng kiểm tra file rồi lưu lesson pack
+theo schema version 3. Sau khi import, ứng dụng kiểm tra file rồi lưu lesson pack
 vào IndexedDB của trình duyệt.
 
 ## 1. Tạo file JSON
@@ -10,7 +10,7 @@ Tạo file, ví dụ `my-daily-english.json`:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "id": "my-daily-english",
   "version": "1.0.0",
   "title": "My Daily English",
@@ -20,26 +20,26 @@ Tạo file, ví dụ `my-daily-english.json`:
   "lexemes": [
     {
       "id": "usually.adv.01",
-      "text": "usually",
+      "lemma": "usually",
       "spokenText": "usually",
       "partOfSpeech": "adverb",
       "meaningVi": "thường"
     },
     {
       "id": "always.adv.01",
-      "text": "always",
+      "lemma": "always",
       "partOfSpeech": "adverb",
       "meaningVi": "luôn luôn"
     },
     {
       "id": "sometimes.adv.01",
-      "text": "sometimes",
+      "lemma": "sometimes",
       "partOfSpeech": "adverb",
       "meaningVi": "thỉnh thoảng"
     },
     {
       "id": "rarely.adv.01",
-      "text": "rarely",
+      "lemma": "rarely",
       "partOfSpeech": "adverb",
       "meaningVi": "hiếm khi"
     }
@@ -65,10 +65,11 @@ Tạo file, ví dụ `my-daily-english.json`:
               "lexemeId": "usually.adv.01",
               "start": 2,
               "end": 9,
-              "distractorLexemeIds": [
-                "always.adv.01",
-                "sometimes.adv.01",
-                "rarely.adv.01"
+              "surfaceText": "usually",
+              "distractors": [
+                { "lexemeId": "always.adv.01", "surfaceText": "always" },
+                { "lexemeId": "sometimes.adv.01", "surfaceText": "sometimes" },
+                { "lexemeId": "rarely.adv.01", "surfaceText": "rarely" }
               ]
             }
           ]
@@ -96,7 +97,7 @@ console.log({ start, end: start + word.length })
 // { start: 2, end: 9 }
 ```
 
-Chuỗi `displayText.slice(start, end)` phải trùng với `lexeme.text`, không phân
+Chuỗi `displayText.slice(start, end)` phải trùng với `target.surfaceText`, không phân
 biệt chữ hoa/thường. Các target trong cùng câu không được chồng lên nhau và mỗi
 câu hỗ trợ từ 1 đến 4 targets.
 
@@ -105,6 +106,12 @@ câu hỗ trợ từ 1 đến 4 targets.
 Không tạo lexeme mới cho mỗi câu. Giữ nguyên `lexemeId`, ví dụ
 `usually.adv.01`, rồi tham chiếu nó từ nhiều sentences. Như vậy toàn bộ câu đều
 cập nhật cùng một mastery/SRS record của từ “usually”.
+
+Với biến thể hình thái, `lemma` vẫn giữ nguyên nhưng mỗi target dùng đúng dạng
+trong câu. Ví dụ lexeme `{ "id": "go.verb.01", "lemma": "go" }` có thể được
+tham chiếu bởi target `surfaceText: "go"` trong một câu và `surfaceText: "went"`
+trong câu khác. Word Choice và Fill Words dùng `surfaceText`; mastery vẫn dùng
+`go.verb.01`. Distractor cũng cần `surfaceText` phù hợp với ngữ cảnh của câu.
 
 ## 4. Import vào ứng dụng
 

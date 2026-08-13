@@ -19,6 +19,16 @@ export interface LessonPackSummary {
   readonly targetCount: number
 }
 
+export interface SkippedLessonPack {
+  readonly id?: LessonPackId
+  readonly reason: 'invalid-or-unsupported'
+}
+
+export interface LessonPackCatalog {
+  readonly summaries: readonly LessonPackSummary[]
+  readonly skipped: readonly SkippedLessonPack[]
+}
+
 export interface LearnerProgress {
   /** Keys are produced by createReviewKey(packId, lexemeId). */
   readonly schedulesByLexemeReviewKey: Readonly<Record<string, ReviewSchedule>>
@@ -49,7 +59,7 @@ export interface PersistenceError {
 }
 
 export interface LessonPackRepository {
-  list(): Promise<Result<readonly LessonPackSummary[], PersistenceError>>
+  list(): Promise<Result<LessonPackCatalog, PersistenceError>>
   get(id: LessonPackId): Promise<Result<LessonPack, PersistenceError>>
   save(pack: LessonPack): Promise<Result<void, PersistenceError>>
   remove(id: LessonPackId): Promise<Result<void, PersistenceError>>

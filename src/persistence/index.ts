@@ -1,6 +1,7 @@
 export type {
   AppSettings,
   LearnerProgress,
+  LessonPackCatalog,
   LessonPackRepository,
   LessonPackSummary,
   PersistenceError,
@@ -8,6 +9,7 @@ export type {
   PersistenceProvider,
   ProgressRepository,
   SettingsRepository,
+  SkippedLessonPack,
 } from './contracts.ts'
 export {
   createInitialProgress,

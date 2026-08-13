@@ -6,6 +6,7 @@ import type {
   LessonPackId,
   Result,
   SentenceId,
+  TargetOccurrenceId,
   Unsubscribe,
 } from '../shared/types.ts'
 import type {
@@ -81,6 +82,9 @@ export interface SentenceSelectionContext {
   readonly lessonId: LessonId
   readonly sentences: readonly Sentence[]
   readonly schedulesByLexemeId: Readonly<Record<LexemeId, ReviewSchedule>>
+  readonly activeTargetIdsBySentenceId: Readonly<
+    Record<SentenceId, readonly TargetOccurrenceId[]>
+  >
   readonly now: IsoDateTime
 }
 

@@ -1,5 +1,6 @@
 import {
   lessonPackSchema,
+  parseLessonPack,
   type LessonPack,
 } from '../domain/lesson-pack.schema.ts'
 import type {
@@ -13,8 +14,8 @@ import type { Result } from '../shared/types.ts'
 import type {
   AppSettings,
   LearnerProgress,
+  LessonPackCatalog,
   LessonPackRepository,
-  LessonPackSummary,
   PersistenceError,
   PersistenceErrorCode,
   PersistenceProvider,
@@ -176,7 +177,7 @@ function isAttemptSignal(value: unknown): value is AttemptSignal {
     Number.isFinite(value.responseTimeMs) &&
     (value.responseTimeMs as number) >= 0 &&
     isIsoDateTime(value.reviewedAt) &&
-    isIsoDateTime(value.nextReviewAt)
+    (value.nextReviewAt === undefined || isIsoDateTime(value.nextReviewAt))
   )
 }
 
@@ -205,6 +206,9 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
   const attempts = session.attemptsByLexemeId
   const schedules = session.schedulesByLexemeId
   const wrongChoices = session.wrongChoiceIdsByOccurrenceKey
+  const activeTargets = session.activeTargetIdsBySentenceId
+  const reviewableOccurrenceKeys = session.reviewableOccurrenceKeys
+  const scheduledOccurrenceKeys = session.scheduledOccurrenceKeys
 
   return (
     typeof session.id === 'string' &&
@@ -222,6 +226,25 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
     Number.isInteger(session.currentTargetIndex) &&
     (session.currentTargetIndex as number) >= 0 &&
     typeof session.currentTargetId === 'string' &&
+    isStringRecord(activeTargets) &&
+    Object.values(activeTargets).every(
+      (ids) =>
+        Array.isArray(ids) &&
+        ids.length > 0 &&
+        ids.every((id) => typeof id === 'string') &&
+        new Set(ids).size === ids.length,
+    ) &&
+    Array.isArray(reviewableOccurrenceKeys) &&
+    reviewableOccurrenceKeys.every((key) => typeof key === 'string') &&
+    new Set(reviewableOccurrenceKeys).size === reviewableOccurrenceKeys.length &&
+    Array.isArray(scheduledOccurrenceKeys) &&
+    scheduledOccurrenceKeys.every(
+      (key) =>
+        typeof key === 'string' && reviewableOccurrenceKeys.includes(key),
+    ) &&
+    new Set(scheduledOccurrenceKeys).size === scheduledOccurrenceKeys.length &&
+    typeof session.isPracticeFallback === 'boolean' &&
+    (!session.isPracticeFallback || reviewableOccurrenceKeys.length === 0) &&
     Array.isArray(session.solvedTargetIds) &&
     session.solvedTargetIds.every((id) => typeof id === 'string') &&
     (session.phase === 'question' ||
@@ -360,17 +383,35 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
     this.connection = connection
   }
 
-  async list(): Promise<Result<readonly LessonPackSummary[], PersistenceError>> {
+  async list(): Promise<Result<LessonPackCatalog, PersistenceError>> {
     try {
       const database = await this.connection.get()
       const transaction = database.transaction(packStore, 'readonly')
       const values = await requestResult<unknown[]>(
         transaction.objectStore(packStore).getAll(),
       )
-      const packs = values.map((value) => lessonPackSchema.parse(value))
+      // Treat each stored pack as its own trust boundary. A single obsolete or
+      // malformed import must not make the rest of the library unavailable.
+      const skipped: LessonPackCatalog['skipped'][number][] = []
+      const packs = values.flatMap((value) => {
+        try {
+          return [parseLessonPack(value)]
+        } catch {
+          const id =
+            isStringRecord(value) && typeof value.id === 'string'
+              ? value.id
+              : undefined
+          skipped.push(
+            id
+              ? { id, reason: 'invalid-or-unsupported' }
+              : { reason: 'invalid-or-unsupported' },
+          )
+          return []
+        }
+      })
 
-      return ok(
-        packs.map((pack) => ({
+      return ok({
+        summaries: packs.map((pack) => ({
           id: pack.id,
           version: pack.version,
           title: pack.title,
@@ -385,7 +426,8 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
             0,
           ),
         })),
-      )
+        skipped,
+      })
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not list lesson packs') }
     }
@@ -403,15 +445,17 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
         return { ok: false, error: { code: 'not-found', message: 'Lesson pack not found' } }
       }
 
-      const parsed = lessonPackSchema.safeParse(value)
-      if (!parsed.success) {
+      let parsed: LessonPack
+      try {
+        parsed = parseLessonPack(value)
+      } catch {
         return {
           ok: false,
           error: { code: 'invalid-data', message: 'Stored lesson pack is invalid' },
         }
       }
 
-      return ok(parsed.data)
+      return ok(parsed)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not load lesson pack') }
     }

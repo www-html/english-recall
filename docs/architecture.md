@@ -48,12 +48,16 @@ semantic `version`. A future incompatible data shape requires a new schema
 version and an explicit migration at the import boundary. Unknown fields are
 rejected so misspelled authoring fields fail early.
 
-Schema version 2 separates reusable `lexemes` from `sentences`. A sentence owns
+Schema version 3 separates reusable `lexemes` from sentence presentation. A
+lexeme owns the stable `lemma`; a sentence target owns its contextual
+`surfaceText`, so `go` and `went` share one mastery identity. A sentence owns
 one to four target occurrences. A target id is local to its sentence; runtime
 maps therefore use a composite `sentenceId::targetId` occurrence key. Every
-target stores an exact UTF-16 `[start, end)` span and exactly three distractor
-lexeme ids. The parser rejects invalid references, duplicate ids, mismatched or
-overlapping spans, and unknown fields.
+target stores an exact UTF-16 `[start, end)` span and exactly three distractors,
+each with a lexeme reference and context-appropriate surface text. The parser
+rejects invalid references, duplicate ids, mismatched or overlapping spans, and
+unknown fields. Valid schema v2 packs are upgraded losslessly at the parser;
+unsupported versions are rejected.
 
 Mastery and SRS schedules are keyed by `packId::lexemeId`. A lexeme may appear
 in many sentence contexts without fragmenting its learning history. Schema
@@ -68,8 +72,11 @@ model; migration requires an explicit authored mapping.
 3. `DefaultLearningEngine` owns question, target feedback, sentence completion,
    pause, resume, restart, and final completion transitions. Wrong answers stay
    on the current target and never expose the expected answer.
-4. `BasicReviewScheduler` updates lexeme due date, interval, ease, repetitions,
-   and lapses after every answer. Auto learning selects Word Choice for weak,
+4. The planner selects new, due, or weak targets for active recall and leaves
+   strong not-due targets visible as supporting context. Incorrect attempts are
+   retained without touching SRS. `BasicReviewScheduler` updates a lexeme once
+   when its target resolves: Good first try, Hard after retry, Again on skip.
+   Auto learning selects Word Choice for weak,
    Fill Words for developing, and Listening Choice for established mastery. It
    is independent from the `autoAdvance` setting.
 5. The app writes each session snapshot and schedule update to IndexedDB. A

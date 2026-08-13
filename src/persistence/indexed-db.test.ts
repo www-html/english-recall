@@ -6,17 +6,17 @@ import { createInitialProgress, defaultAppSettings } from './contracts.ts'
 import { IndexedDbPersistenceProvider } from './indexed-db.ts'
 
 const pack: LessonPack = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: 'persistence-pack',
   version: '2.0.0',
   title: 'Persistence pack',
   sourceLanguage: 'vi',
   targetLanguage: 'en',
   lexemes: [
-    { id: 'hello', text: 'hello', partOfSpeech: 'interjection', meaningVi: 'xin chào' },
-    { id: 'goodbye', text: 'goodbye', partOfSpeech: 'interjection', meaningVi: 'tạm biệt' },
-    { id: 'thanks', text: 'thanks', partOfSpeech: 'interjection', meaningVi: 'cảm ơn' },
-    { id: 'welcome', text: 'welcome', partOfSpeech: 'interjection', meaningVi: 'chào mừng' },
+    { id: 'hello', lemma: 'hello', partOfSpeech: 'interjection', meaningVi: 'xin chào' },
+    { id: 'goodbye', lemma: 'goodbye', partOfSpeech: 'interjection', meaningVi: 'tạm biệt' },
+    { id: 'thanks', lemma: 'thanks', partOfSpeech: 'interjection', meaningVi: 'cảm ơn' },
+    { id: 'welcome', lemma: 'welcome', partOfSpeech: 'interjection', meaningVi: 'chào mừng' },
   ],
   lessons: [
     {
@@ -36,7 +36,12 @@ const pack: LessonPack = {
               lexemeId: 'hello',
               start: 0,
               end: 5,
-              distractorLexemeIds: ['goodbye', 'thanks', 'welcome'],
+              surfaceText: 'Hello',
+              distractors: [
+                { lexemeId: 'goodbye', surfaceText: 'Goodbye' },
+                { lexemeId: 'thanks', surfaceText: 'Thanks' },
+                { lexemeId: 'welcome', surfaceText: 'Welcome' },
+              ],
             },
           ],
         },
@@ -54,6 +59,10 @@ const session: LearningSessionSnapshot = {
   currentSentenceId: 'sentence-one',
   currentTargetIndex: 0,
   currentTargetId: 'target-hello',
+  activeTargetIdsBySentenceId: { 'sentence-one': ['target-hello'] },
+  reviewableOccurrenceKeys: ['sentence-one::target-hello'],
+  scheduledOccurrenceKeys: [],
+  isPracticeFallback: false,
   solvedTargetIds: [],
   phase: 'question',
   learningMode: 'auto',
@@ -82,7 +91,6 @@ const session: LearningSessionSnapshot = {
       wrongAttempts: 1,
       responseTimeMs: 1200,
       reviewedAt: '2026-08-12T12:00:00.000Z',
-      nextReviewAt: '2026-08-12T12:10:00.000Z',
     },
   ],
   schedulesByLexemeId: {
@@ -124,6 +132,23 @@ function writeRawKey(key: string, value: unknown): Promise<void> {
   })
 }
 
+function writeRawPack(value: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('english-recall', 1)
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const database = request.result
+      const transaction = database.transaction('lesson-packs', 'readwrite')
+      transaction.objectStore('lesson-packs').put(value)
+      transaction.oncomplete = () => {
+        database.close()
+        resolve()
+      }
+      transaction.onerror = () => reject(transaction.error)
+    }
+  })
+}
+
 describe('IndexedDbPersistenceProvider', () => {
   const provider = new IndexedDbPersistenceProvider()
 
@@ -147,7 +172,29 @@ describe('IndexedDbPersistenceProvider', () => {
     })
     expect(await provider.lessonPacks.list()).toMatchObject({
       ok: true,
-      value: [{ lessonCount: 1, targetCount: 1 }],
+      value: {
+        summaries: [{ lessonCount: 1, targetCount: 1 }],
+        skipped: [],
+      },
+    })
+  })
+
+  it('keeps valid packs available when another stored pack is obsolete', async () => {
+    await provider.lessonPacks.save(pack)
+    await writeRawPack({ id: 'obsolete-pack', schemaVersion: 1 })
+
+    const listed = await provider.lessonPacks.list()
+    expect(listed).toMatchObject({ ok: true })
+    if (!listed.ok) throw new Error('Expected lesson pack list')
+    expect(listed.value.summaries.map(({ id }) => id)).toContain(pack.id)
+    expect(listed.value.summaries.map(({ id }) => id)).not.toContain('obsolete-pack')
+    expect(listed.value.skipped).toContainEqual({
+      id: 'obsolete-pack',
+      reason: 'invalid-or-unsupported',
+    })
+    expect(await provider.lessonPacks.get('obsolete-pack')).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-data' },
     })
   })
 

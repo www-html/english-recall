@@ -1,15 +1,15 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "id": "english-recall-starter",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "title": "English Recall Starter",
-  "description": "Luyện nhớ từ tiếng Anh qua nhiều ngữ cảnh câu ngắn.",
+  "description": "Luyện nhớ lemma tiếng Anh qua nhiều dạng từ và ngữ cảnh câu ngắn.",
   "sourceLanguage": "vi",
   "targetLanguage": "en-US",
   "lexemes": [
     {
       "id": "usually.adv.01",
-      "text": "usually",
+      "lemma": "usually",
       "spokenText": "usually",
       "partOfSpeech": "adverb",
       "meaningVi": "thường",
@@ -17,93 +17,69 @@
     },
     {
       "id": "always.adv.01",
-      "text": "always",
+      "lemma": "always",
       "partOfSpeech": "adverb",
       "meaningVi": "luôn luôn"
     },
     {
       "id": "sometimes.adv.01",
-      "text": "sometimes",
+      "lemma": "sometimes",
       "partOfSpeech": "adverb",
       "meaningVi": "thỉnh thoảng"
     },
     {
       "id": "normally.adv.01",
-      "text": "normally",
+      "lemma": "normally",
       "partOfSpeech": "adverb",
       "meaningVi": "thông thường"
     },
     {
       "id": "coffee.noun.01",
-      "text": "coffee",
+      "lemma": "coffee",
       "partOfSpeech": "noun",
       "meaningVi": "cà phê"
     },
     {
       "id": "tea.noun.01",
-      "text": "tea",
+      "lemma": "tea",
       "partOfSpeech": "noun",
       "meaningVi": "trà"
     },
     {
       "id": "water.noun.01",
-      "text": "water",
+      "lemma": "water",
       "partOfSpeech": "noun",
       "meaningVi": "nước"
     },
     {
       "id": "lunch.noun.01",
-      "text": "lunch",
+      "lemma": "lunch",
       "partOfSpeech": "noun",
       "meaningVi": "bữa trưa"
     },
     {
-      "id": "clarify.verb.01",
-      "text": "clarify",
+      "id": "go.verb.01",
+      "lemma": "go",
       "partOfSpeech": "verb",
-      "meaningVi": "làm rõ"
+      "meaningVi": "đi"
     },
     {
-      "id": "improve.verb.01",
-      "text": "improve",
+      "id": "work.verb.01",
+      "lemma": "work",
       "partOfSpeech": "verb",
-      "meaningVi": "cải thiện"
+      "meaningVi": "làm việc"
     },
     {
-      "id": "delay.verb.01",
-      "text": "delay",
+      "id": "check.verb.01",
+      "lemma": "check",
       "partOfSpeech": "verb",
-      "meaningVi": "trì hoãn"
+      "meaningVi": "kiểm tra"
     },
     {
-      "id": "ignore.verb.01",
-      "text": "ignore",
+      "id": "be.verb.01",
+      "lemma": "be",
       "partOfSpeech": "verb",
-      "meaningVi": "phớt lờ"
-    },
-    {
-      "id": "deadline.noun.01",
-      "text": "deadline",
-      "partOfSpeech": "noun",
-      "meaningVi": "hạn chót"
-    },
-    {
-      "id": "schedule.noun.01",
-      "text": "schedule",
-      "partOfSpeech": "noun",
-      "meaningVi": "lịch trình"
-    },
-    {
-      "id": "feedback.noun.01",
-      "text": "feedback",
-      "partOfSpeech": "noun",
-      "meaningVi": "phản hồi"
-    },
-    {
-      "id": "meeting.noun.01",
-      "text": "meeting",
-      "partOfSpeech": "noun",
-      "meaningVi": "cuộc họp"
+      "meaningVi": "là, thì, ở"
     }
   ],
   "lessons": [
@@ -127,10 +103,11 @@
               "lexemeId": "usually.adv.01",
               "start": 2,
               "end": 9,
-              "distractorLexemeIds": [
-                "always.adv.01",
-                "sometimes.adv.01",
-                "normally.adv.01"
+              "surfaceText": "usually",
+              "distractors": [
+                { "lexemeId": "always.adv.01", "surfaceText": "always" },
+                { "lexemeId": "sometimes.adv.01", "surfaceText": "sometimes" },
+                { "lexemeId": "normally.adv.01", "surfaceText": "normally" }
               ]
             },
             {
@@ -138,10 +115,11 @@
               "lexemeId": "coffee.noun.01",
               "start": 16,
               "end": 22,
-              "distractorLexemeIds": [
-                "tea.noun.01",
-                "water.noun.01",
-                "lunch.noun.01"
+              "surfaceText": "coffee",
+              "distractors": [
+                { "lexemeId": "tea.noun.01", "surfaceText": "tea" },
+                { "lexemeId": "water.noun.01", "surfaceText": "water" },
+                { "lexemeId": "lunch.noun.01", "surfaceText": "lunch" }
               ]
             }
           ]
@@ -159,10 +137,11 @@
               "lexemeId": "usually.adv.01",
               "start": 4,
               "end": 11,
-              "distractorLexemeIds": [
-                "always.adv.01",
-                "sometimes.adv.01",
-                "normally.adv.01"
+              "surfaceText": "usually",
+              "distractors": [
+                { "lexemeId": "always.adv.01", "surfaceText": "always" },
+                { "lexemeId": "sometimes.adv.01", "surfaceText": "sometimes" },
+                { "lexemeId": "normally.adv.01", "surfaceText": "normally" }
               ]
             }
           ]
@@ -180,10 +159,11 @@
               "lexemeId": "usually.adv.01",
               "start": 3,
               "end": 10,
-              "distractorLexemeIds": [
-                "always.adv.01",
-                "sometimes.adv.01",
-                "normally.adv.01"
+              "surfaceText": "usually",
+              "distractors": [
+                { "lexemeId": "always.adv.01", "surfaceText": "always" },
+                { "lexemeId": "sometimes.adv.01", "surfaceText": "sometimes" },
+                { "lexemeId": "normally.adv.01", "surfaceText": "normally" }
               ]
             }
           ]
@@ -201,10 +181,11 @@
               "lexemeId": "usually.adv.01",
               "start": 3,
               "end": 10,
-              "distractorLexemeIds": [
-                "always.adv.01",
-                "sometimes.adv.01",
-                "normally.adv.01"
+              "surfaceText": "usually",
+              "distractors": [
+                { "lexemeId": "always.adv.01", "surfaceText": "always" },
+                { "lexemeId": "sometimes.adv.01", "surfaceText": "sometimes" },
+                { "lexemeId": "normally.adv.01", "surfaceText": "normally" }
               ]
             }
           ]
@@ -212,71 +193,185 @@
       ]
     },
     {
-      "id": "work-essentials",
-      "title": "Work essentials",
-      "summary": "Nhớ từ công việc trong câu hoàn chỉnh.",
-      "estimatedMinutes": 3,
+      "id": "verb-forms",
+      "title": "Verb forms in context",
+      "summary": "Nhớ cùng một động từ qua dạng cơ bản và dạng biến đổi.",
+      "estimatedMinutes": 6,
       "sentences": [
         {
-          "id": "work-clarify-deadline",
-          "displayText": "Please clarify the deadline before noon.",
-          "speechText": "Please clarify the deadline before noon.",
-          "translationVi": "Vui lòng làm rõ hạn chót trước buổi trưa.",
-          "level": "A2",
-          "topic": "work",
+          "id": "verb-go-present",
+          "displayText": "I go home at six.",
+          "speechText": "I go home at six.",
+          "translationVi": "Tôi về nhà lúc sáu giờ.",
+          "level": "A1",
+          "topic": "verb-forms",
           "targets": [
             {
-              "id": "clarify",
-              "lexemeId": "clarify.verb.01",
-              "start": 7,
-              "end": 14,
-              "distractorLexemeIds": [
-                "improve.verb.01",
-                "delay.verb.01",
-                "ignore.verb.01"
-              ]
-            },
-            {
-              "id": "deadline",
-              "lexemeId": "deadline.noun.01",
-              "start": 19,
-              "end": 27,
-              "distractorLexemeIds": [
-                "schedule.noun.01",
-                "feedback.noun.01",
-                "meeting.noun.01"
+              "id": "go",
+              "lexemeId": "go.verb.01",
+              "start": 2,
+              "end": 4,
+              "surfaceText": "go",
+              "distractors": [
+                { "lexemeId": "work.verb.01", "surfaceText": "work" },
+                { "lexemeId": "check.verb.01", "surfaceText": "check" },
+                { "lexemeId": "be.verb.01", "surfaceText": "am" }
               ]
             }
           ]
         },
         {
-          "id": "work-improve-schedule",
-          "displayText": "Can we improve the schedule today?",
-          "speechText": "Can we improve the schedule today?",
-          "translationVi": "Chúng ta có thể cải thiện lịch trình hôm nay không?",
+          "id": "verb-go-past",
+          "displayText": "Yesterday I went home early.",
+          "speechText": "Yesterday I went home early.",
+          "translationVi": "Hôm qua tôi về nhà sớm.",
           "level": "A2",
-          "topic": "work",
+          "topic": "verb-forms",
+          "explanation": "Went là dạng quá khứ bất quy tắc của go.",
           "targets": [
             {
-              "id": "improve",
-              "lexemeId": "improve.verb.01",
-              "start": 7,
-              "end": 14,
-              "distractorLexemeIds": [
-                "clarify.verb.01",
-                "delay.verb.01",
-                "ignore.verb.01"
+              "id": "went",
+              "lexemeId": "go.verb.01",
+              "start": 12,
+              "end": 16,
+              "surfaceText": "went",
+              "distractors": [
+                { "lexemeId": "work.verb.01", "surfaceText": "worked" },
+                { "lexemeId": "check.verb.01", "surfaceText": "checked" },
+                { "lexemeId": "be.verb.01", "surfaceText": "was" }
               ]
-            },
+            }
+          ]
+        },
+        {
+          "id": "verb-work-present",
+          "displayText": "We work from home.",
+          "speechText": "We work from home.",
+          "translationVi": "Chúng tôi làm việc tại nhà.",
+          "level": "A1",
+          "topic": "verb-forms",
+          "targets": [
             {
-              "id": "schedule",
-              "lexemeId": "schedule.noun.01",
-              "start": 19,
-              "end": 27,
-              "distractorLexemeIds": [
-                "deadline.noun.01",
-                "feedback.noun.01",
-                "meeting.noun.01"
+              "id": "work",
+              "lexemeId": "work.verb.01",
+              "start": 3,
+              "end": 7,
+              "surfaceText": "work",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "go" },
+                { "lexemeId": "check.verb.01", "surfaceText": "check" },
+                { "lexemeId": "be.verb.01", "surfaceText": "are" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verb-work-past",
+          "displayText": "She worked late last night.",
+          "speechText": "She worked late last night.",
+          "translationVi": "Cô ấy đã làm việc muộn tối qua.",
+          "level": "A2",
+          "topic": "verb-forms",
+          "targets": [
+            {
+              "id": "worked",
+              "lexemeId": "work.verb.01",
+              "start": 4,
+              "end": 10,
+              "surfaceText": "worked",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "went" },
+                { "lexemeId": "check.verb.01", "surfaceText": "checked" },
+                { "lexemeId": "be.verb.01", "surfaceText": "was" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verb-check-base",
+          "displayText": "Please check the schedule.",
+          "speechText": "Please check the schedule.",
+          "translationVi": "Vui lòng kiểm tra lịch trình.",
+          "level": "A1",
+          "topic": "verb-forms",
+          "targets": [
+            {
+              "id": "check",
+              "lexemeId": "check.verb.01",
+              "start": 7,
+              "end": 12,
+              "surfaceText": "check",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "go" },
+                { "lexemeId": "work.verb.01", "surfaceText": "work" },
+                { "lexemeId": "be.verb.01", "surfaceText": "be" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verb-check-third-person",
+          "displayText": "He checks the schedule every morning.",
+          "speechText": "He checks the schedule every morning.",
+          "translationVi": "Anh ấy kiểm tra lịch trình mỗi sáng.",
+          "level": "A2",
+          "topic": "verb-forms",
+          "targets": [
+            {
+              "id": "checks",
+              "lexemeId": "check.verb.01",
+              "start": 3,
+              "end": 9,
+              "surfaceText": "checks",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "goes" },
+                { "lexemeId": "work.verb.01", "surfaceText": "works" },
+                { "lexemeId": "be.verb.01", "surfaceText": "is" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verb-be-present",
+          "displayText": "I am ready.",
+          "speechText": "I am ready.",
+          "translationVi": "Tôi đã sẵn sàng.",
+          "level": "A1",
+          "topic": "verb-forms",
+          "targets": [
+            {
+              "id": "am",
+              "lexemeId": "be.verb.01",
+              "start": 2,
+              "end": 4,
+              "surfaceText": "am",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "go" },
+                { "lexemeId": "work.verb.01", "surfaceText": "work" },
+                { "lexemeId": "check.verb.01", "surfaceText": "check" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verb-be-past",
+          "displayText": "The meeting was short.",
+          "speechText": "The meeting was short.",
+          "translationVi": "Cuộc họp đã diễn ra ngắn.",
+          "level": "A2",
+          "topic": "verb-forms",
+          "explanation": "Was là dạng quá khứ số ít của be.",
+          "targets": [
+            {
+              "id": "was",
+              "lexemeId": "be.verb.01",
+              "start": 12,
+              "end": 15,
+              "surfaceText": "was",
+              "distractors": [
+                { "lexemeId": "go.verb.01", "surfaceText": "went" },
+                { "lexemeId": "work.verb.01", "surfaceText": "worked" },
+                { "lexemeId": "check.verb.01", "surfaceText": "checked" }
               ]
             }
           ]

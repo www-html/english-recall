@@ -1,21 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import type { LessonPack } from '../domain/lesson-pack.schema.ts'
-import type { Clock } from './contracts.ts'
-import { DefaultLearningEngine, selectExerciseMode } from './engine.ts'
+import type { Clock, ReviewScheduler } from './contracts.ts'
+import { DefaultLearningEngine, createTargetOccurrenceKey } from './engine.ts'
+import type { RecallRating, ReviewSchedule } from './state.ts'
+
+const now = '2026-08-13T12:00:00.000Z'
+const future = '2026-09-13T12:00:00.000Z'
 
 const pack: LessonPack = {
-  schemaVersion: 2,
-  id: 'test-pack',
-  version: '2.0.0',
+  schemaVersion: 3,
+  id: 'pack',
+  version: '3.0.0',
   title: 'Context recall',
   sourceLanguage: 'vi',
   targetLanguage: 'en',
   lexemes: [
-    { id: 'usually', text: 'usually', partOfSpeech: 'adverb', meaningVi: 'thường' },
-    { id: 'drink', text: 'drink', partOfSpeech: 'verb', meaningVi: 'uống' },
-    { id: 'always', text: 'always', partOfSpeech: 'adverb', meaningVi: 'luôn luôn' },
-    { id: 'sometimes', text: 'sometimes', partOfSpeech: 'adverb', meaningVi: 'đôi khi' },
-    { id: 'normally', text: 'normally', partOfSpeech: 'adverb', meaningVi: 'thông thường' },
+    { id: 'usually', lemma: 'usually', partOfSpeech: 'adverb', meaningVi: 'thường' },
+    { id: 'drink', lemma: 'drink', partOfSpeech: 'verb', meaningVi: 'uống' },
+    { id: 'always', lemma: 'always', partOfSpeech: 'adverb', meaningVi: 'luôn' },
+    { id: 'sometimes', lemma: 'sometimes', partOfSpeech: 'adverb', meaningVi: 'đôi khi' },
+    { id: 'normally', lemma: 'normally', partOfSpeech: 'adverb', meaningVi: 'thông thường' },
   ],
   lessons: [
     {
@@ -23,7 +27,7 @@ const pack: LessonPack = {
       title: 'Habits',
       sentences: [
         {
-          id: 'morning-coffee',
+          id: 'coffee',
           displayText: 'I usually drink coffee.',
           speechText: 'I usually drink coffee.',
           translationVi: 'Tôi thường uống cà phê.',
@@ -31,23 +35,27 @@ const pack: LessonPack = {
           topic: 'habits',
           targets: [
             {
-              id: 'morning-usually',
-              lexemeId: 'usually',
-              start: 2,
-              end: 9,
-              distractorLexemeIds: ['always', 'sometimes', 'normally'],
+              id: 'usually-1', lexemeId: 'usually', start: 2, end: 9,
+              surfaceText: 'usually',
+              distractors: [
+                { lexemeId: 'always', surfaceText: 'always' },
+                { lexemeId: 'sometimes', surfaceText: 'sometimes' },
+                { lexemeId: 'normally', surfaceText: 'normally' },
+              ],
             },
             {
-              id: 'morning-drink',
-              lexemeId: 'drink',
-              start: 10,
-              end: 15,
-              distractorLexemeIds: ['always', 'sometimes', 'normally'],
+              id: 'drink-1', lexemeId: 'drink', start: 10, end: 15,
+              surfaceText: 'drink',
+              distractors: [
+                { lexemeId: 'always', surfaceText: 'always' },
+                { lexemeId: 'sometimes', surfaceText: 'sometimes' },
+                { lexemeId: 'normally', surfaceText: 'normally' },
+              ],
             },
           ],
         },
         {
-          id: 'home-at-six',
+          id: 'home',
           displayText: 'She usually gets home at six.',
           speechText: 'She usually gets home at six.',
           translationVi: 'Cô ấy thường về nhà lúc sáu giờ.',
@@ -55,11 +63,13 @@ const pack: LessonPack = {
           topic: 'habits',
           targets: [
             {
-              id: 'morning-usually',
-              lexemeId: 'usually',
-              start: 4,
-              end: 11,
-              distractorLexemeIds: ['always', 'sometimes', 'normally'],
+              id: 'usually-2', lexemeId: 'usually', start: 4, end: 11,
+              surfaceText: 'usually',
+              distractors: [
+                { lexemeId: 'always', surfaceText: 'always' },
+                { lexemeId: 'sometimes', surfaceText: 'sometimes' },
+                { lexemeId: 'normally', surfaceText: 'normally' },
+              ],
             },
           ],
         },
@@ -68,281 +78,183 @@ const pack: LessonPack = {
   ],
 }
 
+const strongSchedule: ReviewSchedule = {
+  dueAt: future,
+  intervalDays: 30,
+  easeFactor: 2.5,
+  repetitions: 5,
+  lapses: 0,
+}
+
+const weakSchedule: ReviewSchedule = {
+  dueAt: future,
+  intervalDays: 1,
+  easeFactor: 1.5,
+  repetitions: 1,
+  lapses: 2,
+}
+
 class FixedClock implements Clock {
-  now(): string {
-    return '2026-08-12T12:00:05.000Z'
+  now(): string { return now }
+}
+
+class RecordingScheduler implements ReviewScheduler {
+  readonly calls: Array<{ previous: ReviewSchedule | undefined; rating: RecallRating }> = []
+
+  schedule(previous: ReviewSchedule | undefined, rating: RecallRating): ReviewSchedule {
+    this.calls.push({ previous, rating })
+    return { dueAt: future, intervalDays: 3, easeFactor: 2.2, repetitions: 1, lapses: 0 }
   }
 }
 
-function activeSession(engine: DefaultLearningEngine) {
+function active(engine: DefaultLearningEngine) {
   const state = engine.getState()
-  if (state.status !== 'active') throw new Error('Expected active session')
+  if (state.status !== 'active') throw new Error('Expected active state')
   return state.session
 }
 
-describe('DefaultLearningEngine retries', () => {
-  it('records a wrong choice without revealing or advancing', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'word-choice' })
-
-    const result = engine.submit({ kind: 'choice', choiceId: 'always' })
-
-    expect(result.ok).toBe(true)
-    const session = activeSession(engine)
-    expect(session).toMatchObject({
-      phase: 'question',
-      currentSentenceId: 'morning-coffee',
-      currentTargetId: 'morning-usually',
-      solvedTargetIds: [],
-      wrongChoiceIdsByOccurrenceKey: {
-        'morning-coffee::morning-usually': ['always'],
-      },
-    })
-    expect(session.lastEvaluation).toMatchObject({ outcome: 'incorrect' })
-    expect(session.lastEvaluation).not.toHaveProperty('expectedAnswer')
-  })
-
-  it('records a wrong fill without revealing or advancing', () => {
+describe('active and supporting targets', () => {
+  it('exercises due/new targets only and never alters a supporting target', () => {
     const engine = new DefaultLearningEngine(new FixedClock())
     engine.start({
       pack,
       lessonId: 'habits',
+      now,
       learningMode: 'fill-words',
-      now: '2026-08-12T12:00:00.000Z',
+      schedulesByLexemeId: { drink: strongSchedule },
     })
 
-    engine.submit({ kind: 'text', value: 'usual' })
+    const session = active(engine)
+    expect(session.sentenceQueue).toEqual(['coffee'])
+    expect(session.activeTargetIdsBySentenceId).toEqual({ coffee: ['usually-1'] })
+    expect(session.currentTargetId).toBe('usually-1')
+    engine.submit({ kind: 'text', value: 'usually' })
+    expect(active(engine).schedulesByLexemeId.drink).toEqual(strongSchedule)
+  })
 
-    const session = activeSession(engine)
-    expect(session.phase).toBe('question')
-    expect(session.currentTargetId).toBe('morning-usually')
-    expect(session.lastEvaluation).not.toHaveProperty('expectedAnswer')
-    expect(session.attemptHistory[0]).toMatchObject({
-      lexemeId: 'usually',
-      sentenceId: 'morning-coffee',
-      exerciseMode: 'fill-words',
-      outcome: 'incorrect',
-      firstTry: false,
-      wrongAttempts: 1,
-      responseTimeMs: 5000,
+  it('supports multiple active lexemes but selects one occurrence per lexeme', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({ pack, lessonId: 'habits', now })
+
+    expect(active(engine).activeTargetIdsBySentenceId).toEqual({
+      coffee: ['usually-1', 'drink-1'],
     })
+    expect(active(engine).sentenceQueue).toEqual(['coffee'])
+  })
+
+  it('treats weak but not-due mastery as active', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      schedulesByLexemeId: { usually: weakSchedule, drink: strongSchedule },
+    })
+    expect(active(engine).activeTargetIdsBySentenceId).toEqual({ coffee: ['usually-1'] })
+  })
+
+  it('falls back to non-reviewable practice when nothing is active', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    const scheduler = new RecordingScheduler()
+    const withScheduler = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    withScheduler.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      learningMode: 'fill-words',
+      schedulesByLexemeId: { usually: strongSchedule, drink: strongSchedule },
+    })
+    expect(active(withScheduler).isPracticeFallback).toBe(true)
+    expect(active(withScheduler).reviewableOccurrenceKeys).toEqual([])
+    withScheduler.submit({ kind: 'text', value: 'usually' })
+    expect(scheduler.calls).toHaveLength(0)
+    expect(active(withScheduler).schedulesByLexemeId.usually).toEqual(strongSchedule)
+    expect(engine.getState()).toEqual({ status: 'idle' })
   })
 })
 
-describe('DefaultLearningEngine sentence flow', () => {
-  it('preserves solved targets while moving through a multi-target sentence', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'fill-words' })
+describe('SRS scheduling invariants', () => {
+  it('records three wrong attempts then schedules exactly once as hard on correct', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
+
+    engine.submit({ kind: 'text', value: 'x' })
+    engine.submit({ kind: 'text', value: 'y' })
+    engine.submit({ kind: 'text', value: 'z' })
+    expect(scheduler.calls).toHaveLength(0)
+    expect(active(engine).lastEvaluation).not.toHaveProperty('expectedAnswer')
     engine.submit({ kind: 'text', value: 'usually' })
 
-    expect(activeSession(engine)).toMatchObject({
-      phase: 'target-feedback',
-      solvedTargetIds: ['morning-usually'],
-    })
-
-    engine.advance()
-    expect(activeSession(engine)).toMatchObject({
-      phase: 'question',
-      currentTargetId: 'morning-drink',
-      solvedTargetIds: ['morning-usually'],
-    })
+    expect(scheduler.calls).toEqual([{ previous: undefined, rating: 'hard' }])
+    expect(active(engine).attemptHistory).toHaveLength(4)
+    expect(active(engine).attemptHistory.slice(0, 3).every((a) => !a.nextReviewAt)).toBe(true)
+    expect(active(engine).scheduledOccurrenceKeys).toEqual(['coffee::usually-1'])
   })
 
-  it('exposes sentence completion before explicit next-sentence advance', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'fill-words' })
+  it('restart cannot schedule a resolved occurrence twice', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
     engine.submit({ kind: 'text', value: 'usually' })
-    engine.advance()
-    engine.submit({ kind: 'text', value: 'drink' })
-    engine.advance()
+    engine.restartSentence()
+    engine.submit({ kind: 'text', value: 'usually' })
 
-    expect(activeSession(engine)).toMatchObject({
-      phase: 'sentence-complete',
-      currentSentenceId: 'morning-coffee',
-      solvedTargetIds: ['morning-usually', 'morning-drink'],
-    })
-
-    engine.advance()
-    expect(activeSession(engine)).toMatchObject({
-      phase: 'question',
-      currentSentenceId: 'home-at-six',
-      solvedTargetIds: [],
-    })
+    expect(scheduler.calls).toHaveLength(1)
+    expect(scheduler.calls[0]?.rating).toBe('good')
+    expect(active(engine).scheduledOccurrenceKeys).toEqual(['coffee::usually-1'])
   })
 
-  it('shares one mastery schedule across sentence contexts for a lexeme', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'fill-words' })
-    engine.submit({ kind: 'text', value: 'usually' })
-    engine.advance()
-    engine.submit({ kind: 'text', value: 'drink' })
-    engine.advance()
-    engine.advance()
-    engine.submit({ kind: 'text', value: 'usually' })
-
-    const session = activeSession(engine)
-    expect(session.schedulesByLexemeId.usually?.repetitions).toBe(2)
-    expect(session.attemptsByLexemeId.usually).toMatchObject({
-      attempts: 2,
-      correct: 2,
-    })
-    expect(
-      session.attemptHistory.filter(({ lexemeId }) => lexemeId === 'usually'),
-    ).toHaveLength(2)
+  it('skip resolves and schedules again once', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({ pack, lessonId: 'habits', now })
+    engine.skip()
+    expect(scheduler.calls.map(({ rating }) => rating)).toEqual(['again'])
+    engine.restartSentence()
+    engine.skip()
+    expect(scheduler.calls).toHaveLength(1)
   })
+})
 
-  it('isolates retries when two sentences reuse a local target id', () => {
+describe('completion metrics', () => {
+  it('counts difficult lexemes uniquely with target-oriented wording', () => {
     const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'word-choice' })
-    engine.submit({ kind: 'choice', choiceId: 'always' })
-    engine.submit({ kind: 'choice', choiceId: 'usually' })
-    engine.advance()
-    engine.submit({ kind: 'choice', choiceId: 'drink' })
-    engine.advance()
-    engine.advance()
-
-    const session = activeSession(engine)
-    expect(session.currentSentenceId).toBe('home-at-six')
-    expect(session.currentTargetId).toBe('morning-usually')
-    expect(
-      session.wrongChoiceIdsByOccurrenceKey[
-        'home-at-six::morning-usually'
-      ],
-    ).toBeUndefined()
-  })
-
-  it('completes only after the final completed sentence is advanced', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'fill-words' })
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
+    engine.submit({ kind: 'text', value: 'wrong' })
     engine.submit({ kind: 'text', value: 'usually' })
     engine.advance()
-    engine.submit({ kind: 'text', value: 'drink' })
+    engine.skip()
     engine.advance()
-    engine.advance()
-    engine.submit({ kind: 'text', value: 'usually' })
     engine.advance()
 
-    expect(engine.getState()).toMatchObject({
-      status: 'active',
-      session: { phase: 'sentence-complete', currentSentenceId: 'home-at-six' },
-    })
-
-    engine.advance()
     expect(engine.getState()).toMatchObject({
       status: 'completed',
-      result: { correctAnswers: 3, incorrectAnswers: 0 },
+      result: {
+        reviewedLexemes: 2,
+        completedTargets: 2,
+        difficultLexemes: 2,
+        correctAnswers: 1,
+        incorrectAnswers: 1,
+        skippedTargets: 1,
+        practiceTargets: 0,
+      },
     })
   })
 })
 
-describe('DefaultLearningEngine modes and restore', () => {
-  it('adapts the exercise across weak, developing, and established mastery', () => {
-    expect(selectExerciseMode('auto', undefined)).toBe('word-choice')
-    expect(
-      selectExerciseMode('auto', {
-        dueAt: '2026-08-12T12:00:00.000Z',
-        intervalDays: 10,
-        easeFactor: 2.3,
-        repetitions: 3,
-        lapses: 0,
-      }),
-    ).toBe('fill-words')
-    expect(
-      selectExerciseMode('auto', {
-        dueAt: '2026-09-12T12:00:00.000Z',
-        intervalDays: 30,
-        easeFactor: 2.5,
-        repetitions: 5,
-        lapses: 0,
-      }),
-    ).toBe('listening-choice')
-  })
-
-  it('records Listening Choice with the same no-reveal retry semantics', () => {
+describe('durable restore', () => {
+  it('restores active/supporting and scheduling guards exactly', () => {
     const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'listening-choice' })
-
-    engine.submit({ kind: 'choice', choiceId: 'always' })
-    const session = activeSession(engine)
-    expect(session).toMatchObject({
-      phase: 'question',
-      exerciseMode: 'listening-choice',
-      currentTargetId: 'morning-usually',
-    })
-    expect(session.lastEvaluation).not.toHaveProperty('expectedAnswer')
-    expect(session.attemptHistory[0]?.exerciseMode).toBe('listening-choice')
-  })
-
-  it('pauses and restores the exact sentence/target/mastery state', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'word-choice' })
-    engine.submit({ kind: 'choice', choiceId: 'always' })
-    engine.pause()
-    const paused = engine.getState()
-    if (paused.status !== 'paused') throw new Error('Expected paused session')
-
-    const restored = new DefaultLearningEngine(new FixedClock())
-    expect(restored.restore({ pack, snapshot: paused.session }).ok).toBe(true)
-    expect(restored.getState()).toEqual({ status: 'active', session: paused.session })
-
-    restored.pause()
-    expect(restored.resume().ok).toBe(true)
-    expect(activeSession(restored)).toEqual(paused.session)
-  })
-
-  it('rejects answering while paused and rejects an inconsistent restore', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits' })
-    engine.pause()
-    expect(engine.submit({ kind: 'choice', choiceId: 'usually' })).toMatchObject({
-      ok: false,
-      error: { code: 'invalid-state' },
-    })
-
-    const paused = engine.getState()
-    if (paused.status !== 'paused') throw new Error('Expected paused session')
-    const invalidSnapshot = {
-      ...paused.session,
-      currentTargetId: 'not-in-this-sentence',
-    }
-    expect(engine.restore({ pack, snapshot: invalidSnapshot })).toMatchObject({
-      ok: false,
-      error: { code: 'invalid-snapshot' },
-    })
-  })
-
-  it('rejects a snapshot missing occurrence-key retry state without throwing', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits' })
-    const snapshot = activeSession(engine)
-    const malformed = { ...snapshot } as Record<string, unknown>
-    delete malformed.wrongChoiceIdsByOccurrenceKey
-
-    const restore = () =>
-      engine.restore({
-        pack,
-        snapshot: malformed as unknown as typeof snapshot,
-      })
-    expect(restore).not.toThrow()
-    expect(restore()).toMatchObject({
-      ok: false,
-      error: { code: 'invalid-snapshot' },
-    })
-  })
-
-  it('restarts only the current sentence while retaining learning history', () => {
-    const engine = new DefaultLearningEngine(new FixedClock())
-    engine.start({ pack, lessonId: 'habits', learningMode: 'fill-words' })
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
     engine.submit({ kind: 'text', value: 'usually' })
-    engine.advance()
+    const snapshot = active(engine)
+    const restored = new DefaultLearningEngine(new FixedClock())
 
-    expect(engine.restartSentence().ok).toBe(true)
-    expect(activeSession(engine)).toMatchObject({
-      currentSentenceId: 'morning-coffee',
-      currentTargetId: 'morning-usually',
-      solvedTargetIds: [],
-      phase: 'question',
-      attemptsByLexemeId: { usually: { correct: 1 } },
-    })
+    expect(restored.restore({ pack, snapshot }).ok).toBe(true)
+    expect(active(restored)).toEqual(snapshot)
+    expect(snapshot.scheduledOccurrenceKeys).toContain(
+      createTargetOccurrenceKey('coffee', 'usually-1'),
+    )
   })
 })

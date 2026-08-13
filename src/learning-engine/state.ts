@@ -47,7 +47,8 @@ export interface AttemptSignal {
   readonly wrongAttempts: number
   readonly responseTimeMs: number
   readonly reviewedAt: IsoDateTime
-  readonly nextReviewAt: IsoDateTime
+  /** Present only after this occurrence resolves and affects SRS. */
+  readonly nextReviewAt?: IsoDateTime
 }
 
 interface AnswerEvaluationBase {
@@ -78,6 +79,15 @@ export interface LearningSessionSnapshot {
   readonly currentSentenceId: SentenceId
   readonly currentTargetIndex: number
   readonly currentTargetId: TargetOccurrenceId
+  /** Targets exercised in each queued sentence; all others are supporting context. */
+  readonly activeTargetIdsBySentenceId: Readonly<
+    Record<SentenceId, readonly TargetOccurrenceId[]>
+  >
+  /** Empty in practice fallback; these occurrences are allowed to update SRS. */
+  readonly reviewableOccurrenceKeys: readonly string[]
+  /** Durable idempotency guard: each occurrence can schedule at most once. */
+  readonly scheduledOccurrenceKeys: readonly string[]
+  readonly isPracticeFallback: boolean
   readonly solvedTargetIds: readonly TargetOccurrenceId[]
   readonly phase: 'question' | 'target-feedback' | 'sentence-complete'
   readonly learningMode: LearningMode
@@ -97,9 +107,12 @@ export interface LearningSessionSnapshot {
 
 export interface SessionResult {
   readonly reviewedLexemes: number
+  readonly completedTargets: number
+  readonly difficultLexemes: number
   readonly correctAnswers: number
   readonly incorrectAnswers: number
-  readonly skippedItems: number
+  readonly skippedTargets: number
+  readonly practiceTargets: number
   readonly accuracyPercent: number
   readonly completedAt: IsoDateTime
 }

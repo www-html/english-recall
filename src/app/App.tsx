@@ -12,6 +12,7 @@ import {
 import { HomeScreen } from '../features/home/HomeScreen.tsx'
 import {
   LearningScreen,
+  type ChoiceOption,
   type LearningFeedback,
 } from '../features/learning/LearningScreen.tsx'
 import { PauseScreen } from '../features/pause/PauseScreen.tsx'
@@ -19,6 +20,7 @@ import { SummaryScreen } from '../features/summary/SummaryScreen.tsx'
 import {
   createTargetOccurrenceKey,
   DefaultLearningEngine,
+  getMasteryPercent,
   type LearningEngineState,
   type LearningMode,
   type LearningResponse,
@@ -33,6 +35,10 @@ import {
   type LearnerProgress,
 } from '../persistence/index.ts'
 import './app.css'
+import {
+  createDailyLearningPlan,
+  createStableChoices,
+} from './session-planning.ts'
 import { getSlowerSpeechRate, useSpeech } from './use-speech.ts'
 
 type AppView = 'home' | 'learning' | 'pause' | 'summary'
@@ -43,7 +49,7 @@ interface SessionContext {
   readonly sentence: Sentence
   readonly target: TargetOccurrence
   readonly lexeme: Lexeme
-  readonly choices: readonly Lexeme[]
+  readonly choices: readonly ChoiceOption[]
 }
 
 function schedulesForSession(
@@ -85,23 +91,6 @@ function mergeSessionSchedules(
   return { ...progress, schedulesByLexemeReviewKey }
 }
 
-function orderedChoices(
-  pack: LessonPack,
-  target: TargetOccurrence,
-): readonly Lexeme[] {
-  const choiceIds = [target.lexemeId, ...target.distractorLexemeIds]
-  const rotation = [...`${target.lexemeId}:${target.id}`].reduce(
-    (sum, character) => sum + character.charCodeAt(0),
-    0,
-  ) % choiceIds.length
-  const rotated = [...choiceIds.slice(rotation), ...choiceIds.slice(0, rotation)]
-
-  return rotated.flatMap((id) => {
-    const lexeme = pack.lexemes.find((candidate) => candidate.id === id)
-    return lexeme ? [lexeme] : []
-  })
-}
-
 function findSessionContext(
   packs: readonly LessonPack[],
   state: LearningEngineState,
@@ -128,7 +117,11 @@ function findSessionContext(
     sentence,
     target,
     lexeme,
-    choices: orderedChoices(pack, target),
+    choices: createStableChoices(
+      target,
+      state.session.id,
+      sentence.id,
+    ),
   }
 }
 
@@ -141,15 +134,26 @@ function targetStep(
     return sentence ? [sentence] : []
   })
   const total = queuedSentences.reduce(
-    (count, sentence) => count + sentence.targets.length,
+    (count, sentence) =>
+      count + (session.activeTargetIdsBySentenceId[sentence.id]?.length ?? 0),
     0,
   )
   const previous = queuedSentences
     .slice(0, session.currentSentenceIndex)
-    .reduce((count, sentence) => count + sentence.targets.length, 0)
+    .reduce(
+      (count, sentence) =>
+        count + (session.activeTargetIdsBySentenceId[sentence.id]?.length ?? 0),
+      0,
+    )
+  const currentTargetPosition = Math.max(
+    0,
+    session.activeTargetIdsBySentenceId[session.currentSentenceId]?.indexOf(
+      session.currentTargetId,
+    ) ?? 0,
+  )
 
   return {
-    current: Math.min(total, previous + session.currentTargetIndex + 1),
+    current: Math.min(total, previous + currentTargetPosition + 1),
     total,
   }
 }
@@ -212,11 +216,18 @@ export default function App() {
       let loadedPacks: LessonPack[] = [builtInPack]
       if (savedBuiltIn.ok && packListResult.ok) {
         const loaded = await Promise.all(
-          packListResult.value.map((summary) => provider.lessonPacks.get(summary.id)),
+          packListResult.value.summaries.map((summary) =>
+            provider.lessonPacks.get(summary.id),
+          ),
         )
         loadedPacks = loaded.flatMap((result) => (result.ok ? [result.value] : []))
         if (!loadedPacks.some((pack) => pack.id === builtInPack.id)) {
           loadedPacks.unshift(builtInPack)
+        }
+        if (packListResult.value.skipped.length > 0) {
+          setNotice(
+            `${packListResult.value.skipped.length} invalid or unsupported lesson pack was skipped.`,
+          )
         }
       } else {
         setStorageAvailable(false)
@@ -310,6 +321,25 @@ export default function App() {
     () => findSessionContext(packs, engineState),
     [engineState, packs],
   )
+  const dailyPlan = useMemo(
+    () => createDailyLearningPlan(packs, progress),
+    [packs, progress],
+  )
+  const homeStatistics = useMemo(() => {
+    const schedules = Object.values(progress.schedulesByLexemeReviewKey)
+    return {
+      wordsReviewed: schedules.length,
+      masteredWords: schedules.filter(
+        (schedule) => getMasteryPercent(schedule) >= 70,
+      ).length,
+      accuracyPercent:
+        progress.totalAnswers === 0
+          ? 0
+          : Math.round(
+              (progress.correctAnswers / progress.totalAnswers) * 100,
+            ),
+    }
+  }, [progress])
 
   useEffect(() => {
     if (engineState.status !== 'active' || !context) return
@@ -335,7 +365,10 @@ export default function App() {
 
     if (session.phase === 'target-feedback') {
       if (settings.audioEnabled) {
-        speak(context.lexeme.spokenText ?? context.lexeme.text, settings.speechRate)
+        speak(
+          context.lexeme.spokenText ?? context.target.surfaceText,
+          settings.speechRate,
+        )
       }
       const timeout = window.setTimeout(() => engine.advance(), 300)
       return () => window.clearTimeout(timeout)
@@ -351,6 +384,15 @@ export default function App() {
     setSettings(next)
     void provider.settings.save(next)
     if (!next.audioEnabled) stopSpeaking()
+  }
+
+  const updateHomeLearningMode = (learningMode: LearningMode) => {
+    const state = engine.getState()
+    if (state.status === 'active' || state.status === 'paused') {
+      const result = engine.setLearningMode(learningMode)
+      if (!result.ok) setNotice(result.error.message)
+    }
+    updateSettings({ ...settings, learningMode })
   }
 
   const setLearningMode = (learningMode: LearningMode) => {
@@ -376,6 +418,14 @@ export default function App() {
     }
     setNotice(undefined)
     setView('learning')
+  }
+
+  const startDailyLearning = () => {
+    if (!dailyPlan) {
+      setNotice('Import a valid lesson pack to start learning.')
+      return
+    }
+    startLesson(dailyPlan.pack, dailyPlan.lesson)
   }
 
   const resumeSession = () => {
@@ -472,6 +522,9 @@ export default function App() {
           return lexeme ? [lexeme] : []
         })}
         solvedTargetIds={session.solvedTargetIds}
+        activeTargetIds={
+          session.activeTargetIdsBySentenceId[session.currentSentenceId] ?? []
+        }
         currentStep={step.current}
         totalSteps={step.total}
         mode={session.learningMode}
@@ -554,15 +607,19 @@ export default function App() {
   return (
     <HomeScreen
       packs={packs}
-      progress={progress}
-      settings={settings}
+      reviewCount={dailyPlan?.reviewCount ?? 0}
+      newCount={dailyPlan?.newCount ?? 0}
+      estimatedMinutes={dailyPlan?.estimatedMinutes ?? 1}
+      statistics={homeStatistics}
+      learningMode={settings.learningMode}
       canResume={canResume}
       storageAvailable={storageAvailable}
       notice={notice}
+      onStartLearning={startDailyLearning}
       onResume={resumeSession}
-      onStart={startLesson}
+      onLearningModeChange={updateHomeLearningMode}
+      onStartLesson={startLesson}
       onImport={(file) => void importLessonPack(file)}
-      onSettingsChange={updateSettings}
     />
   )
 }

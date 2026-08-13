@@ -20,7 +20,12 @@ export function SummaryScreen({
         <span className="summary-icon"><Sparkles size={30} aria-hidden="true" /></span>
         <p className="eyebrow">Session complete</p>
         <h1 id="summary-title">Strong finish.</h1>
-        <p>You completed <strong>{lessonTitle}</strong>. Your next review is now scheduled.</p>
+        <p>
+          You completed <strong>{lessonTitle}</strong>.{' '}
+          {result.reviewedLexemes > 0
+            ? 'Your next review is now scheduled.'
+            : 'This was a practice session, so your review schedule did not change.'}
+        </p>
 
         <div className="accuracy-ring" style={{ '--accuracy': `${result.accuracyPercent * 3.6}deg` } as React.CSSProperties}>
           <span><strong>{result.accuracyPercent}%</strong><small>accuracy</small></span>
@@ -28,8 +33,8 @@ export function SummaryScreen({
 
         <div className="summary-stats">
           <div><Check size={18} aria-hidden="true" /><span><strong>{result.correctAnswers}</strong> correct</span></div>
-          <div><RotateCcw size={18} aria-hidden="true" /><span><strong>{result.incorrectAnswers}</strong> to review</span></div>
-          <div><Target size={18} aria-hidden="true" /><span><strong>{result.reviewedLexemes}</strong> words practiced</span></div>
+          <div><RotateCcw size={18} aria-hidden="true" /><span><strong>{result.incorrectAnswers}</strong> wrong attempts</span></div>
+          <div><Target size={18} aria-hidden="true" /><span><strong>{result.difficultLexemes}</strong> difficult words</span></div>
         </div>
 
         <div className="summary-actions">

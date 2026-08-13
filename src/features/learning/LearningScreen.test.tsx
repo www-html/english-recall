@@ -8,14 +8,14 @@ import { getSlowerSpeechRate } from '../../app/use-speech.ts'
 import { LearningScreen, type LearningScreenProps } from './LearningScreen.tsx'
 
 const lexemes: readonly Lexeme[] = [
-  { id: 'usually', text: 'usually', partOfSpeech: 'adverb', meaningVi: 'thường' },
-  { id: 'coffee', text: 'coffee', partOfSpeech: 'noun', meaningVi: 'cà phê' },
-  { id: 'always', text: 'always', partOfSpeech: 'adverb', meaningVi: 'luôn luôn' },
-  { id: 'sometimes', text: 'sometimes', partOfSpeech: 'adverb', meaningVi: 'đôi khi' },
-  { id: 'normally', text: 'normally', partOfSpeech: 'adverb', meaningVi: 'thông thường' },
-  { id: 'tea', text: 'tea', partOfSpeech: 'noun', meaningVi: 'trà' },
-  { id: 'water', text: 'water', partOfSpeech: 'noun', meaningVi: 'nước' },
-  { id: 'lunch', text: 'lunch', partOfSpeech: 'noun', meaningVi: 'bữa trưa' },
+  { id: 'usually', lemma: 'usually', partOfSpeech: 'adverb', meaningVi: 'thường' },
+  { id: 'coffee', lemma: 'coffee', partOfSpeech: 'noun', meaningVi: 'cà phê' },
+  { id: 'always', lemma: 'always', partOfSpeech: 'adverb', meaningVi: 'luôn luôn' },
+  { id: 'sometimes', lemma: 'sometimes', partOfSpeech: 'adverb', meaningVi: 'đôi khi' },
+  { id: 'normally', lemma: 'normally', partOfSpeech: 'adverb', meaningVi: 'thông thường' },
+  { id: 'tea', lemma: 'tea', partOfSpeech: 'noun', meaningVi: 'trà' },
+  { id: 'water', lemma: 'water', partOfSpeech: 'noun', meaningVi: 'nước' },
+  { id: 'lunch', lemma: 'lunch', partOfSpeech: 'noun', meaningVi: 'bữa trưa' },
 ]
 
 const sentence: Sentence = {
@@ -32,14 +32,24 @@ const sentence: Sentence = {
       lexemeId: 'usually',
       start: 2,
       end: 9,
-      distractorLexemeIds: ['always', 'sometimes', 'normally'],
+      surfaceText: 'usually',
+      distractors: [
+        { lexemeId: 'always', surfaceText: 'always' },
+        { lexemeId: 'sometimes', surfaceText: 'sometimes' },
+        { lexemeId: 'normally', surfaceText: 'normally' },
+      ],
     },
     {
       id: 'target-two',
       lexemeId: 'coffee',
       start: 16,
       end: 22,
-      distractorLexemeIds: ['tea', 'water', 'lunch'],
+      surfaceText: 'coffee',
+      distractors: [
+        { lexemeId: 'tea', surfaceText: 'tea' },
+        { lexemeId: 'water', surfaceText: 'water' },
+        { lexemeId: 'lunch', surfaceText: 'lunch' },
+      ],
     },
   ],
 }
@@ -58,8 +68,12 @@ function createProps(
     sentence,
     currentTarget: sentence.targets[0]!,
     targetLexeme: getLexeme('usually'),
-    choices: ['usually', 'always', 'sometimes', 'normally'].map(getLexeme),
+    choices: ['usually', 'always', 'sometimes', 'normally'].map((lexemeId) => ({
+      lexemeId,
+      surfaceText: getLexeme(lexemeId).lemma,
+    })),
     sentenceTargetLexemes: [getLexeme('usually'), getLexeme('coffee')],
+    activeTargetIds: ['target-one', 'target-two'],
     solvedTargetIds: [],
     currentStep: 1,
     totalSteps: 2,
@@ -100,6 +114,15 @@ describe('LearningScreen sentence recall', () => {
     expect(line?.textContent).not.toContain('coffee')
     expect(screen.getByLabelText('Missing word')).toBeTruthy()
     expect(screen.getByLabelText('Unsolved word')).toBeTruthy()
+  })
+
+  it('keeps supporting targets visible when they are not active', () => {
+    const { container } = render(
+      <LearningScreen {...createProps({ activeTargetIds: ['target-one'] })} />,
+    )
+
+    expect(container.querySelector('.sentence-line')?.textContent).toContain('coffee')
+    expect(screen.queryByLabelText('Unsolved word')).toBeNull()
   })
 
   it('uses 1–4 shortcuts and keeps wrong choices marked without revealing text', () => {
@@ -158,7 +181,6 @@ describe('LearningScreen sentence recall', () => {
   })
 
   it('shows all target meanings and exposes real session settings', async () => {
-    const user = userEvent.setup()
     const onAutoAdvanceChange = vi.fn()
     const onSpeechRateChange = vi.fn()
     const { rerender } = render(
@@ -167,10 +189,10 @@ describe('LearningScreen sentence recall', () => {
       />,
     )
 
-    await user.click(screen.getByRole('button', { name: 'Open session menu' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Session settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open session menu' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Session settings' }))
     const dialog = screen.getByRole('dialog', { name: 'Session settings' })
-    await user.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('checkbox'))
     fireEvent.change(within(dialog).getByRole('slider'), { target: { value: '1.1' } })
     expect(onAutoAdvanceChange).toHaveBeenCalledWith(true)
     expect(onSpeechRateChange).toHaveBeenCalledWith(1.1)
@@ -203,5 +225,20 @@ describe('LearningScreen sentence recall', () => {
 
     fireEvent.keyDown(window, { key: '3' })
     expect(onSubmitChoice).toHaveBeenCalledWith('sometimes')
+  })
+
+  it('confirms before ending and explains saved progress', async () => {
+    const user = userEvent.setup()
+    const onEndSession = vi.fn()
+    render(<LearningScreen {...createProps({ onEndSession })} />)
+
+    await user.click(screen.getByRole('button', { name: 'Open session menu' }))
+    await user.click(screen.getByRole('menuitem', { name: 'End session' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'End this session?' })
+    expect(within(dialog).getByText(/Completed progress stays saved/)).toBeTruthy()
+    expect(onEndSession).not.toHaveBeenCalled()
+
+    await user.click(within(dialog).getByRole('button', { name: 'End session' }))
+    expect(onEndSession).toHaveBeenCalledOnce()
   })
 })

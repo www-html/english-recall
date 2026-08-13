@@ -85,12 +85,14 @@ function createProps(
     sentenceComplete: false,
     speechSupported: false,
     speaking: false,
+    audioEnabled: true,
     autoAdvance: false,
     speechRate: 0.9,
     slowerSpeechRate: getSlowerSpeechRate(0.9),
     onPause: vi.fn(),
     onRestartSentence: vi.fn(),
     onModeChange: vi.fn(),
+    onAudioEnabledChange: vi.fn(),
     onAutoAdvanceChange: vi.fn(),
     onSpeechRateChange: vi.fn(),
     onEndSession: vi.fn(),
@@ -106,6 +108,39 @@ function createProps(
 afterEach(cleanup)
 
 describe('LearningScreen sentence recall', () => {
+  it('toggles automatic question audio from the learning footer', () => {
+    const onAudioEnabledChange = vi.fn()
+    const { rerender } = render(
+      <LearningScreen
+        {...createProps({ speechSupported: true, onAudioEnabledChange })}
+      />,
+    )
+
+    const enabledToggle = screen.getByRole('button', {
+      name: 'Automatic audio for new questions: on',
+    })
+    expect(enabledToggle.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(enabledToggle)
+    expect(onAudioEnabledChange).toHaveBeenCalledWith(false)
+
+    rerender(
+      <LearningScreen
+        {...createProps({
+          speechSupported: true,
+          audioEnabled: false,
+          onAudioEnabledChange,
+        })}
+      />,
+    )
+    expect(
+      screen
+        .getByRole('button', {
+          name: 'Automatic audio for new questions: off',
+        })
+        .getAttribute('aria-pressed'),
+    ).toBe('false')
+  })
+
   it('hides both the current target and unsolved future targets', () => {
     const { container } = render(<LearningScreen {...createProps()} />)
     const line = container.querySelector('.sentence-line')

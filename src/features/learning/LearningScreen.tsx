@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Settings2,
   Volume2,
+  VolumeX,
 } from 'lucide-react'
 import {
   Fragment,
@@ -58,12 +59,14 @@ export interface LearningScreenProps {
   readonly sentenceComplete: boolean
   readonly speechSupported: boolean
   readonly speaking: boolean
+  readonly audioEnabled: boolean
   readonly autoAdvance: boolean
   readonly speechRate: number
   readonly slowerSpeechRate: number
   readonly onPause: () => void
   readonly onRestartSentence: () => void
   readonly onModeChange: (mode: LearningMode) => void
+  readonly onAudioEnabledChange: (enabled: boolean) => void
   readonly onAutoAdvanceChange: (enabled: boolean) => void
   readonly onSpeechRateChange: (rate: number) => void
   readonly onEndSession: () => void
@@ -345,12 +348,14 @@ export function LearningScreen({
   sentenceComplete,
   speechSupported,
   speaking,
+  audioEnabled,
   autoAdvance,
   speechRate,
   slowerSpeechRate,
   onPause,
   onRestartSentence,
   onModeChange,
+  onAudioEnabledChange,
   onAutoAdvanceChange,
   onSpeechRateChange,
   onEndSession,
@@ -739,7 +744,25 @@ export function LearningScreen({
           <span>
             Target {Math.max(1, activeTargetPosition)} of {activeTargetIds.length}
           </span>
-          <span><kbd>↑</kbd> listen <kbd>↓</kbd> slower</span>
+          <div className="learning-footer-actions">
+            <span className="learning-audio-shortcuts">
+              <kbd>↑</kbd> listen <kbd>↓</kbd> slower
+            </span>
+            <button
+              className={`question-audio-toggle ${audioEnabled ? 'is-enabled' : ''}`}
+              type="button"
+              disabled={!speechSupported}
+              aria-pressed={audioEnabled}
+              aria-label={`Automatic audio for new questions: ${audioEnabled ? 'on' : 'off'}`}
+              onClick={() => onAudioEnabledChange(!audioEnabled)}
+            >
+              {audioEnabled
+                ? <Volume2 size={16} aria-hidden="true" />
+                : <VolumeX size={16} aria-hidden="true" />}
+              <span>Auto audio</span>
+              <strong>{audioEnabled ? 'On' : 'Off'}</strong>
+            </button>
+          </div>
         </footer>
       </section>
     </main>

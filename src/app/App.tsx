@@ -527,7 +527,6 @@ export default function App() {
 
     if (
       session.phase === 'question' &&
-      session.exerciseMode === 'listening-choice' &&
       settings.audioEnabled
     ) {
       const questionKey = [
@@ -974,12 +973,16 @@ export default function App() {
         sentenceComplete={session.phase === 'sentence-complete'}
         speechSupported={speechSupported}
         speaking={speaking}
+        audioEnabled={settings.audioEnabled}
         autoAdvance={settings.autoAdvance}
         speechRate={settings.speechRate}
         slowerSpeechRate={getSlowerSpeechRate(settings.speechRate)}
         onPause={pauseSession}
         onRestartSentence={restartSentence}
         onModeChange={setLearningMode}
+        onAudioEnabledChange={(audioEnabled) =>
+          updateSettings({ ...settings, audioEnabled })
+        }
         onAutoAdvanceChange={(autoAdvance) =>
           updateSettings({ ...settings, autoAdvance })
         }

@@ -1,12 +1,18 @@
-# Hướng dẫn thêm dữ liệu học
+# Lesson Pack Authoring Guide
 
-English Recall không dùng SQL hay backend. “Database bài học” là một file JSON
-theo schema version 3. Sau khi import, ứng dụng kiểm tra file rồi lưu lesson pack
-vào IndexedDB của trình duyệt.
+English Recall does not use SQL or a backend. Its lesson database is a JSON
+file that follows lesson-pack schema version 3. When a file is imported, the
+application validates the complete pack before storing it in the browser's
+IndexedDB.
 
-## 1. Tạo file JSON
+This document is the authoritative content-authoring reference for English
+Recall lesson-pack JSON files. Authors and AI systems generating lesson content
+should follow every rule below exactly. The schema is strict: fields not defined
+by the schema are rejected.
 
-Tạo file, ví dụ `my-daily-english.json`:
+## 1. Create the JSON file
+
+Create a file such as `my-daily-english.json`:
 
 ```json
 {
@@ -80,14 +86,36 @@ Tạo file, ví dụ `my-daily-english.json`:
 }
 ```
 
-Một pack cần ít nhất 4 lexemes vì mỗi target có 1 đáp án đúng và đúng 3
-distractors. Nên chọn distractors cùng loại từ và hợp ngữ cảnh để bài tập có ý
-nghĩa.
+A pack requires at least four lexemes because every target has one correct
+lexeme and exactly three distractors. Choose distractors with a compatible part
+of speech and a plausible contextual form so that the exercise remains useful.
 
-## 2. Tính `start` và `end`
+Apply these identity and reference rules:
 
-`start` là vị trí ký tự đầu tiên; `end` là vị trí ngay sau ký tự cuối. Có thể
-kiểm tra bằng Node.js hoặc DevTools:
+- `lexeme.id` must be unique within the pack.
+- `lesson.id` must be unique within the pack.
+- `sentence.id` must be unique across the entire pack, including across
+  different lessons.
+- `target.id` must be unique within its sentence.
+- Every target's `lexemeId` must reference an existing lexeme in the pack.
+- Every target must contain exactly three distractors with three different
+  `lexemeId` values.
+- Every distractor `lexemeId` must reference an existing lexeme in the pack.
+- A distractor must not use the same `lexemeId` as its target.
+
+Pack `version` must use the `major.minor.patch` semantic-version format. A pack
+must contain at least one lesson; every lesson must contain at least one
+sentence; and every sentence must contain between one and four targets. Valid
+`level` values are `A1`, `A2`, `B1`, `B2`, `C1`, and `C2`. Valid
+`partOfSpeech` values are `noun`, `verb`, `adjective`, `adverb`, `pronoun`,
+`preposition`, `conjunction`, `determiner`, `interjection`, `phrase`, and
+`other`.
+
+## 2. Calculate `start` and `end`
+
+`start` is the zero-based position of the target's first character. `end` is
+the position immediately after its final character. You can verify both values
+with Node.js or browser DevTools:
 
 ```js
 const text = 'I usually work from home.'
@@ -97,42 +125,60 @@ console.log({ start, end: start + word.length })
 // { start: 2, end: 9 }
 ```
 
-Chuỗi `displayText.slice(start, end)` phải trùng với `target.surfaceText`, không phân
-biệt chữ hoa/thường. Các target trong cùng câu không được chồng lên nhau và mỗi
-câu hỗ trợ từ 1 đến 4 targets.
+`displayText.slice(start, end)` must equal `target.surfaceText`, ignoring letter
+case. The range must stay inside `displayText`, `end` must be greater than
+`start`, and target ranges in the same sentence must not overlap. JavaScript
+string indexes are UTF-16 character offsets, so calculate spans with JavaScript
+when the sentence contains emoji or characters represented by surrogate pairs.
 
-## 3. Dùng lại một từ trong nhiều ngữ cảnh
+## 3. Reuse one word in multiple contexts
 
-Không tạo lexeme mới cho mỗi câu. Giữ nguyên `lexemeId`, ví dụ
-`usually.adv.01`, rồi tham chiếu nó từ nhiều sentences. Như vậy toàn bộ câu đều
-cập nhật cùng một mastery/SRS record của từ “usually”.
+Do not create a new lexeme for every sentence. Keep the same stable `lexemeId`,
+such as `usually.adv.01`, and reference it from multiple sentences. All of those
+contexts then update the same mastery/SRS record for “usually.”
 
-Với biến thể hình thái, `lemma` vẫn giữ nguyên nhưng mỗi target dùng đúng dạng
-trong câu. Ví dụ lexeme `{ "id": "go.verb.01", "lemma": "go" }` có thể được
-tham chiếu bởi target `surfaceText: "go"` trong một câu và `surfaceText: "went"`
-trong câu khác. Word Choice và Fill Words dùng `surfaceText`; mastery vẫn dùng
-`go.verb.01`. Distractor cũng cần `surfaceText` phù hợp với ngữ cảnh của câu.
+For inflected or irregular forms, keep the lemma unchanged and put the exact
+form used by the sentence in each target's `surfaceText`. For example, the
+lexeme `{ "id": "go.verb.01", "lemma": "go" }` can be referenced by a target
+with `surfaceText: "go"` in one sentence and `surfaceText: "went"` in another.
+Word Choice and Fill Words use `surfaceText`, while mastery remains keyed by
+`go.verb.01`. Each distractor also needs a `surfaceText` appropriate for the
+sentence context; its `lexemeId` remains the stable mastery identity it
+references.
 
-## 4. Import vào ứng dụng
+## 4. Import the pack into the application
 
-1. Mở Home.
-2. Chọn **Import JSON**.
-3. Chọn file JSON vừa tạo.
-4. Khi thấy thông báo import thành công, lesson mới xuất hiện trong **Lesson
-   library**.
-5. Mở lesson và thử cả Word Choice, Fill Words và Listening Choice từ menu `⋮`.
+1. Open **Home**.
+2. Select **Import JSON**.
+3. Choose the JSON file you created.
+4. After the success message appears, find the new pack in **Lesson library**.
+5. Open a lesson and test Word Choice, Fill Words, and Listening Choice from the
+   `⋮` menu.
 
-Nếu schema, id, reference hoặc character span sai, ứng dụng từ chối toàn bộ file
-và hiển thị lỗi. Không dùng id `english-recall-starter` cho pack riêng vì đó là
-id của nội dung tích hợp sẵn.
+If any schema field, ID, reference, or character span is invalid, English
+Recall rejects the entire file and displays an error. Do not use
+`english-recall-starter` as a custom pack ID because it belongs to the bundled
+starter content.
 
-## 5. Cập nhật và sao lưu
+## 5. Update and preserve lesson content
 
-- Muốn cập nhật pack: giữ nguyên `id`, tăng `version`, rồi import lại. Pack cùng
-  id sẽ được thay thế.
-- Luôn giữ file JSON gốc làm bản sao lưu. Hiện ứng dụng chưa có chức năng export.
-- IndexedDB lưu pack, settings, session đang học và SRS trên đúng browser/profile
-  hiện tại. Xóa site data hoặc đổi browser/profile có thể làm mất dữ liệu local.
+- To update a pack, keep its `id`, increase its semantic `version`, and import
+  it again. English Recall replaces the installed pack only when the update is
+  valid and follows its version-safety rules. A downgrade, or changed content
+  with the same version, is rejected.
+- Always retain the original authored lesson-pack JSON file. English Recall
+  currently has no dedicated lesson-pack JSON export.
+- **Learner Backup** is a separate feature for moving installed packs, settings,
+  active-session state, and learner progress. It is not the canonical authoring
+  source for an individual lesson pack.
+- **Export Diagnostics** is also separate. It exports local structured
+  troubleshooting events, not lesson content or learner backup data.
+- IndexedDB stores packs, settings, the active session, and SRS data in the
+  current browser profile. Clearing site data or changing browser/profile can
+  remove that local data, so use Learner Backup when moving learning state.
 
-File mẫu đầy đủ đang dùng trong dự án là
-[`src/data/starter-pack.json`](../src/data/starter-pack.json).
+The complete production example bundled with the project is
+[`src/data/starter-pack.json`](../src/data/starter-pack.json). The executable
+schema is [`src/domain/lesson-pack.schema.ts`](../src/domain/lesson-pack.schema.ts);
+if this guide and the executable schema ever differ, update this guide before
+authoring or generating more content.

@@ -113,5 +113,6 @@ exhausted, Extra Practice creates a non-reviewable session that cannot modify
 SRS.
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and data
-flow. See [docs/them-du-lieu-hoc.md](docs/them-du-lieu-hoc.md) for a Vietnamese
-step-by-step guide to creating and importing a lesson database.
+flow. See
+[docs/lesson-pack-authoring-guide.md](docs/lesson-pack-authoring-guide.md) for
+the authoritative guide to creating and importing lesson-pack JSON files.

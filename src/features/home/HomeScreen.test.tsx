@@ -24,6 +24,8 @@ function createProps(overrides: Partial<HomeScreenProps> = {}): HomeScreenProps 
     onLearningModeChange: vi.fn(),
     onStartLesson: vi.fn(),
     onImport: vi.fn(),
+    onExportBackup: vi.fn(),
+    onRestoreBackup: vi.fn(),
     ...overrides,
   }
 }
@@ -42,7 +44,7 @@ describe('HomeScreen daily-first flow', () => {
     expect(onStartLearning).toHaveBeenCalledOnce()
   })
 
-  it('continues a saved session and exposes all learning modes in a select', () => {
+  it('continues a saved session and exposes an accessible mode selector', () => {
     const onResume = vi.fn()
     const onLearningModeChange = vi.fn()
     render(
@@ -55,9 +57,47 @@ describe('HomeScreen daily-first flow', () => {
     expect(onResume).toHaveBeenCalledOnce()
     expect(screen.getByText(/completed progress is already saved/i)).toBeTruthy()
 
-    const select = screen.getByRole('combobox', { name: 'Learning mode' })
-    expect(screen.getAllByRole('option')).toHaveLength(4)
-    fireEvent.change(select, { target: { value: 'listening-choice' } })
+    const selector = screen.getByRole('radiogroup', { name: 'Learning mode' })
+    const options = screen.getAllByRole('radio')
+    expect(options).toHaveLength(4)
+    expect(options[0]?.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(screen.getByRole('radio', { name: 'Listening Choice' }))
     expect(onLearningModeChange).toHaveBeenCalledWith('listening-choice')
+    expect(selector).toBeTruthy()
+  })
+
+  it('supports arrow-key selection without adding extra tab stops', () => {
+    const onLearningModeChange = vi.fn()
+    render(<HomeScreen {...createProps({ onLearningModeChange })} />)
+
+    const auto = screen.getByRole('radio', { name: 'Auto' })
+    const wordChoice = screen.getByRole('radio', { name: 'Word Choice' })
+    auto.focus()
+    fireEvent.keyDown(auto, { key: 'ArrowRight' })
+
+    expect(onLearningModeChange).toHaveBeenCalledWith('word-choice')
+    expect(document.activeElement).toBe(wordChoice)
+    expect(screen.getByRole('radio', { name: 'Fill Words' }).tabIndex).toBe(-1)
+  })
+
+  it('reuses Home for backup export and restore without changing the primary flow', () => {
+    const onExportBackup = vi.fn()
+    const onRestoreBackup = vi.fn()
+    const { container } = render(
+      <HomeScreen
+        {...createProps({ onExportBackup, onRestoreBackup })}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export backup' }))
+    expect(onExportBackup).toHaveBeenCalledOnce()
+
+    const backupInput = container.querySelectorAll('input[type="file"]')[1]
+    const backup = new File(['{}'], 'backup.json', { type: 'application/json' })
+    expect(backupInput).toBeTruthy()
+    fireEvent.change(backupInput as HTMLInputElement, {
+      target: { files: [backup] },
+    })
+    expect(onRestoreBackup).toHaveBeenCalledWith(backup)
   })
 })

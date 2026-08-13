@@ -38,26 +38,59 @@ class SystemClock implements Clock {
   }
 }
 
+export const MAX_NEW_PER_SESSION = 5
+export const MAX_REVIEW_PER_SESSION = 20
+export const MAX_TOTAL_ACTIVE_TARGETS = 25
+
+type CandidatePriority = 0 | 1 | 2 | 3
+
+function startOfUtcDay(timestamp: number): number {
+  const date = new Date(timestamp)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+}
+
+function candidatePriority(
+  schedule: ReviewSchedule | undefined,
+  now: number,
+): CandidatePriority | undefined {
+  if (!schedule) return 3
+  const dueAt = Date.parse(schedule.dueAt)
+  if (dueAt < startOfUtcDay(now)) return 0
+  if (getMasteryPercent(schedule) < 40) return 1
+  if (dueAt <= now) return 2
+  return undefined
+}
+
 class DueFirstSentenceSelector implements SentenceSelector {
   select(context: SentenceSelectionContext): readonly SentenceId[] {
-    const score = (sentence: Sentence) =>
-      Math.min(
-        ...sentence.targets
-          .filter((target) =>
-            context.activeTargetIdsBySentenceId[sentence.id]?.includes(target.id),
-          )
-          .map((target) => {
-            const dueAt = context.schedulesByLexemeId[target.lexemeId]?.dueAt
-            return dueAt ? Date.parse(dueAt) : 0
-          }),
-      )
+    const now = Date.parse(context.now)
+    const score = (sentence: Sentence): readonly [number, number] => {
+      const candidates = sentence.targets
+        .filter((target) =>
+          context.activeTargetIdsBySentenceId[sentence.id]?.includes(target.id),
+        )
+        .map((target) => {
+          const schedule = context.schedulesByLexemeId[target.lexemeId]
+          return [
+            candidatePriority(schedule, now) ?? 3,
+            schedule ? Date.parse(schedule.dueAt) : Number.POSITIVE_INFINITY,
+          ] as const
+        })
+      return candidates.toSorted(
+        (left, right) => left[0] - right[0] || left[1] - right[1],
+      )[0] ?? [3, Number.POSITIVE_INFINITY]
+    }
 
     return context.sentences
       .filter(
         (sentence) =>
           (context.activeTargetIdsBySentenceId[sentence.id]?.length ?? 0) > 0,
       )
-      .toSorted((left, right) => score(left) - score(right))
+      .toSorted((left, right) => {
+        const leftScore = score(left)
+        const rightScore = score(right)
+        return leftScore[0] - rightScore[0] || leftScore[1] - rightScore[1]
+      })
       .map(({ id }) => id)
   }
 }
@@ -101,6 +134,15 @@ interface SessionPlan {
   readonly isPracticeFallback: boolean
 }
 
+interface SessionCandidate {
+  readonly sentence: Sentence
+  readonly sentenceIndex: number
+  readonly target: TargetOccurrence
+  readonly targetIndex: number
+  readonly priority: CandidatePriority
+  readonly dueAt: number
+}
+
 function createSessionPlan(
   lesson: Lesson,
   schedules: Readonly<Record<LexemeId, ReviewSchedule>>,
@@ -113,34 +155,61 @@ function createSessionPlan(
 
   const candidates = lesson.sentences.flatMap((sentence, sentenceIndex) =>
     sentence.targets
-      .filter((target) => {
+      .map((target, targetIndex): SessionCandidate | undefined => {
         const schedule = schedules[target.lexemeId]
-        return (
-          !schedule ||
-          Date.parse(schedule.dueAt) <= nowTime ||
-          getMasteryPercent(schedule) < 40
-        )
+        const priority = candidatePriority(schedule, nowTime)
+        return priority === undefined
+          ? undefined
+          : {
+              sentence,
+              sentenceIndex,
+              target,
+              targetIndex,
+              priority,
+              dueAt: schedule
+                ? Date.parse(schedule.dueAt)
+                : Number.POSITIVE_INFINITY,
+            }
       })
-      .map((target) => ({
-        sentence,
-        sentenceIndex,
-        target,
-        due: schedules[target.lexemeId]
-          ? Date.parse(schedules[target.lexemeId]!.dueAt)
-          : 0,
-      })),
+      .filter((candidate): candidate is SessionCandidate => Boolean(candidate)),
   )
 
+  let newCount = 0
+  let reviewCount = 0
   candidates
     .toSorted(
-      (left, right) => left.due - right.due || left.sentenceIndex - right.sentenceIndex,
+      (left, right) =>
+        left.priority - right.priority ||
+        left.dueAt - right.dueAt ||
+        left.sentenceIndex - right.sentenceIndex ||
+        left.targetIndex - right.targetIndex ||
+        left.target.lexemeId.localeCompare(right.target.lexemeId),
     )
     .forEach(({ sentence, target }) => {
       if (seenLexemes.has(target.lexemeId)) return
+      const isNew = !schedules[target.lexemeId]
+      if (
+        reviewableKeys.length >= MAX_TOTAL_ACTIVE_TARGETS ||
+        (isNew && newCount >= MAX_NEW_PER_SESSION) ||
+        (!isNew && reviewCount >= MAX_REVIEW_PER_SESSION)
+      ) {
+        return
+      }
       seenLexemes.add(target.lexemeId)
       ;(active[sentence.id] ??= []).push(target.id)
       reviewableKeys.push(createTargetOccurrenceKey(sentence.id, target.id))
+      if (isNew) newCount += 1
+      else reviewCount += 1
     })
+
+  for (const [sentenceId, targetIds] of Object.entries(active)) {
+    const sentence = lesson.sentences.find(({ id }) => id === sentenceId)
+    if (!sentence) continue
+    const targetOrder = new Map(sentence.targets.map(({ id }, index) => [id, index]))
+    targetIds.sort(
+      (left, right) => (targetOrder.get(left) ?? 0) - (targetOrder.get(right) ?? 0),
+    )
+  }
 
   if (reviewableKeys.length > 0) {
     return {
@@ -153,7 +222,12 @@ function createSessionPlan(
   // Nothing is due: expose each lexeme once as non-reviewable practice.
   lesson.sentences.forEach((sentence) => {
     sentence.targets.forEach((target) => {
-      if (seenLexemes.has(target.lexemeId)) return
+      if (
+        seenLexemes.has(target.lexemeId) ||
+        seenLexemes.size >= MAX_TOTAL_ACTIVE_TARGETS
+      ) {
+        return
+      }
       seenLexemes.add(target.lexemeId)
       ;(active[sentence.id] ??= []).push(target.id)
     })

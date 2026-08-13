@@ -1,7 +1,7 @@
 {
   "name": "english-recall",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "lint": "oxlint",
     "test": "vitest run --maxWorkers=1",
     "test:watch": "vitest",
+    "validate:content": "vitest run src/data/content-validation.test.ts --maxWorkers=1",
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview"
   },

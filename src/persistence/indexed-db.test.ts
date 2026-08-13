@@ -3,7 +3,10 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { LessonPack } from '../domain/lesson-pack.schema.ts'
 import type { LearningSessionSnapshot } from '../learning-engine/index.ts'
 import { createInitialProgress, defaultAppSettings } from './contracts.ts'
-import { IndexedDbPersistenceProvider } from './indexed-db.ts'
+import {
+  BACKUP_SCHEMA_VERSION,
+  IndexedDbPersistenceProvider,
+} from './indexed-db.ts'
 
 const pack: LessonPack = {
   schemaVersion: 3,
@@ -179,6 +182,27 @@ describe('IndexedDbPersistenceProvider', () => {
     })
   })
 
+  it('enforces pack downgrade and same-version conflict policy at storage', async () => {
+    const policyPack = { ...pack, id: 'policy-pack' }
+    const upgraded = { ...policyPack, version: '2.1.0' }
+    expect(await provider.lessonPacks.save(upgraded)).toMatchObject({ ok: true })
+    expect(await provider.lessonPacks.save(policyPack)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-data' },
+    })
+    expect(
+      await provider.lessonPacks.save({
+        ...upgraded,
+        title: 'Changed without version bump',
+      }),
+    ).toMatchObject({ ok: false, error: { code: 'invalid-data' } })
+    expect(await provider.lessonPacks.get(policyPack.id)).toMatchObject({
+      ok: true,
+      value: { version: '2.1.0', title: policyPack.title },
+    })
+    await provider.lessonPacks.remove(policyPack.id)
+  })
+
   it('keeps valid packs available when another stored pack is obsolete', async () => {
     await provider.lessonPacks.save(pack)
     await writeRawPack({ id: 'obsolete-pack', schemaVersion: 1 })
@@ -195,6 +219,58 @@ describe('IndexedDbPersistenceProvider', () => {
     expect(await provider.lessonPacks.get('obsolete-pack')).toMatchObject({
       ok: false,
       error: { code: 'invalid-data' },
+    })
+    await provider.lessonPacks.remove('obsolete-pack')
+  })
+
+  it('keeps invalid stored packs quarantined during backup export', async () => {
+    await provider.lessonPacks.save(pack)
+    await writeRawPack({ id: 'quarantined-pack', schemaVersion: 1 })
+
+    const exported = await provider.backup.export()
+    expect(exported).toMatchObject({
+      ok: true,
+      value: { lessonPacks: [{ id: pack.id }] },
+    })
+    if (exported.ok) {
+      expect(exported.value.lessonPacks).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: 'quarantined-pack' })]),
+      )
+    }
+    await provider.lessonPacks.remove('quarantined-pack')
+  })
+
+  it('losslessly upgrades a stored v2 lesson pack during backup export', async () => {
+    const version2Pack = {
+      ...pack,
+      schemaVersion: 2,
+      lexemes: pack.lexemes.map(({ lemma, ...lexeme }) => ({
+        ...lexeme,
+        text: lemma,
+      })),
+      lessons: pack.lessons.map((lesson) => ({
+        ...lesson,
+        sentences: lesson.sentences.map((sentence) => ({
+          ...sentence,
+          targets: sentence.targets.map(({ surfaceText: _surfaceText, distractors, ...target }) => ({
+            ...target,
+            distractorLexemeIds: distractors.map(({ lexemeId }) => lexemeId),
+          })),
+        })),
+      })),
+    }
+    await writeRawPack(version2Pack)
+
+    const exported = await provider.backup.export()
+    if (!exported.ok) throw new Error('Expected migrated backup')
+    expect(exported.value.lessonPacks[0]).toMatchObject({
+      schemaVersion: 3,
+      lexemes: expect.arrayContaining([expect.objectContaining({ lemma: 'hello' })]),
+    })
+    expect(await provider.backup.restore(exported.value)).toMatchObject({ ok: true })
+    expect(await provider.lessonPacks.get(pack.id)).toEqual({
+      ok: true,
+      value: exported.value.lessonPacks[0],
     })
   })
 
@@ -258,6 +334,218 @@ describe('IndexedDbPersistenceProvider', () => {
     await provider.progress.clearActiveSession()
   })
 
+  it('serializes rapid progress and session writes so the newest snapshot wins', async () => {
+    const progressWrites = Array.from({ length: 25 }, (_, index) => ({
+      ...createInitialProgress(),
+      sessionsCompleted: index,
+      totalAnswers: index,
+      correctAnswers: index,
+    }))
+    const sessionWrites = Array.from({ length: 25 }, (_, index) => ({
+      ...session,
+      updatedAt: `2026-08-12T12:00:${String(index).padStart(2, '0')}.000Z`,
+    }))
+
+    const pendingWrites = [
+      ...progressWrites.map((value) => provider.progress.saveProgress(value)),
+      ...sessionWrites.map((value) => provider.progress.saveActiveSession(value)),
+    ]
+    const pendingProgressReload = provider.progress.loadProgress()
+    const pendingSessionReload = provider.progress.loadActiveSession()
+    const results = await Promise.all(pendingWrites)
+
+    expect(results.every((result) => result.ok)).toBe(true)
+    expect(await pendingProgressReload).toEqual({
+      ok: true,
+      value: progressWrites.at(-1),
+    })
+    expect(await pendingSessionReload).toEqual({
+      ok: true,
+      value: sessionWrites.at(-1),
+    })
+  })
+
+  it('atomically saves the newest progress and resumable session together', async () => {
+    const states = Array.from({ length: 20 }, (_, index) => ({
+      progress: {
+        ...createInitialProgress(),
+        sessionsCompleted: index,
+        totalAnswers: index,
+        correctAnswers: index,
+      },
+      activeSession: {
+        ...session,
+        updatedAt: `2026-08-12T12:01:${String(index).padStart(2, '0')}.000Z`,
+      },
+    }))
+
+    const writes = states.map(({ progress, activeSession }) =>
+      provider.progress.saveLearningState(progress, activeSession),
+    )
+    expect((await Promise.all(writes)).every((result) => result.ok)).toBe(true)
+    const newest = states.at(-1)!
+    expect(await provider.progress.loadProgress()).toEqual({
+      ok: true,
+      value: newest.progress,
+    })
+    expect(await provider.progress.loadActiveSession()).toEqual({
+      ok: true,
+      value: newest.activeSession,
+    })
+  })
+
+  it('backs up a valid session when a supporting target precedes the active target', async () => {
+    const mixedSession: LearningSessionSnapshot = {
+      ...session,
+      currentTargetIndex: 1,
+      currentTargetId: 'target-active',
+      activeTargetIdsBySentenceId: { 'sentence-one': ['target-active'] },
+      reviewableOccurrenceKeys: ['sentence-one::target-active'],
+      wrongChoiceIdsByOccurrenceKey: {},
+      attemptsByLexemeId: {},
+      attemptHistory: [],
+      schedulesByLexemeId: {},
+    }
+    const mixedPack: LessonPack = {
+      ...pack,
+      id: 'mixed-target-pack',
+      lessons: [
+        {
+          ...pack.lessons[0]!,
+          sentences: [
+            {
+              ...pack.lessons[0]!.sentences[0]!,
+              displayText: 'Hello goodbye.',
+              speechText: 'Hello goodbye.',
+              targets: [
+                pack.lessons[0]!.sentences[0]!.targets[0]!,
+                {
+                  ...pack.lessons[0]!.sentences[0]!.targets[0]!,
+                  id: 'target-active',
+                  lexemeId: 'goodbye',
+                  start: 6,
+                  end: 13,
+                  surfaceText: 'goodbye',
+                  distractors: [
+                    { lexemeId: 'hello', surfaceText: 'hello' },
+                    { lexemeId: 'thanks', surfaceText: 'thanks' },
+                    { lexemeId: 'welcome', surfaceText: 'welcome' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const compatibleSession = { ...mixedSession, packId: mixedPack.id }
+    await provider.lessonPacks.save(mixedPack)
+    await provider.progress.saveActiveSession(compatibleSession)
+    expect(await provider.backup.export()).toMatchObject({ ok: true })
+    await provider.lessonPacks.remove(mixedPack.id)
+    await provider.progress.clearActiveSession()
+  })
+
+  it('exports and atomically restores all durable application data', async () => {
+    const progress = {
+      ...createInitialProgress(),
+      sessionsCompleted: 7,
+      totalAnswers: 18,
+      correctAnswers: 15,
+      schedulesByLexemeReviewKey: {
+        'persistence-pack::hello': session.schedulesByLexemeId.hello!,
+      },
+    }
+    const settings = {
+      ...defaultAppSettings,
+      learningMode: 'fill-words' as const,
+      autoAdvance: true,
+      speechRate: 1.1,
+    }
+    await provider.lessonPacks.remove(pack.id)
+    await provider.lessonPacks.save(pack)
+    await provider.progress.saveProgress(progress)
+    await provider.progress.saveActiveSession(session)
+    await provider.settings.save(settings)
+
+    const exported = await provider.backup.export()
+    expect(exported).toMatchObject({
+      ok: true,
+      value: {
+        format: 'english-recall-backup',
+        schemaVersion: BACKUP_SCHEMA_VERSION,
+        lessonPacks: [{ id: pack.id }],
+        progress,
+        activeSession: session,
+        settings,
+      },
+    })
+    if (!exported.ok) throw new Error('Expected a backup')
+
+    await provider.lessonPacks.remove(pack.id)
+    await provider.progress.saveProgress(createInitialProgress())
+    await provider.progress.clearActiveSession()
+    await provider.settings.save(defaultAppSettings)
+
+    expect(await provider.backup.restore(exported.value)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(await provider.lessonPacks.get(pack.id)).toEqual({ ok: true, value: pack })
+    expect(await provider.progress.loadProgress()).toEqual({ ok: true, value: progress })
+    expect(await provider.progress.loadActiveSession()).toEqual({
+      ok: true,
+      value: session,
+    })
+    expect(await provider.settings.load()).toEqual({ ok: true, value: settings })
+  })
+
+  it('rejects corrupted or unsupported backups without changing existing data', async () => {
+    const before = await provider.backup.export()
+    if (!before.ok) throw new Error('Expected a backup')
+
+    const corrupted = {
+      ...before.value,
+      progress: {
+        ...before.value.progress,
+        schedulesByLexemeReviewKey: {
+          'missing-pack::missing-lexeme': session.schedulesByLexemeId.hello,
+        },
+      },
+    }
+    expect(await provider.backup.restore(corrupted)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-data' },
+    })
+    expect(await provider.backup.restore({
+      ...before.value,
+      activeSession: before.value.activeSession
+        ? { ...before.value.activeSession, currentTargetId: 'missing-target' }
+        : session,
+    })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-data' },
+    })
+    expect(await provider.backup.restore({
+      ...before.value,
+      schemaVersion: 99,
+    })).toMatchObject({
+      ok: false,
+      error: { code: 'unsupported-version' },
+    })
+
+    const after = await provider.backup.export()
+    expect(after).toMatchObject({
+      ok: true,
+      value: {
+        lessonPacks: before.value.lessonPacks,
+        progress: before.value.progress,
+        activeSession: before.value.activeSession,
+        settings: before.value.settings,
+      },
+    })
+  })
+
   it('migrates legacy settings without conflating learning mode and auto advance', async () => {
     await writeRawKey('settings', {
       autoMode: true,
@@ -276,7 +564,7 @@ describe('IndexedDbPersistenceProvider', () => {
     })
   })
 
-  it('preserves aggregate progress while safely dropping unmappable v1 schedules', async () => {
+  it('rejects legacy progress rather than applying a lossy SRS migration', async () => {
     await writeRawKey('learner-progress', {
       schedulesByReviewKey: { 'old-pack::old-item': session.schedulesByLexemeId.hello },
       sessionsCompleted: 3,
@@ -285,15 +573,9 @@ describe('IndexedDbPersistenceProvider', () => {
       lastStudiedAt: '2026-08-01T00:00:00.000Z',
     })
 
-    expect(await provider.progress.loadProgress()).toEqual({
-      ok: true,
-      value: {
-        schedulesByLexemeReviewKey: {},
-        sessionsCompleted: 3,
-        totalAnswers: 20,
-        correctAnswers: 15,
-        lastStudiedAt: '2026-08-01T00:00:00.000Z',
-      },
+    expect(await provider.progress.loadProgress()).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-data' },
     })
   })
 
@@ -369,6 +651,25 @@ describe('IndexedDbPersistenceProvider', () => {
       ok: false,
       error: { code: 'unavailable' },
     })
+    expect(await unavailableProvider.backup.export()).toMatchObject({
+      ok: false,
+      error: { code: 'unavailable' },
+    })
     vi.unstubAllGlobals()
+  })
+
+  it('surfaces quota errors from durable writes', async () => {
+    const put = vi
+      .spyOn(IDBObjectStore.prototype, 'put')
+      .mockImplementation(() => {
+        throw new DOMException('Storage is full', 'QuotaExceededError')
+      })
+    const quotaProvider = new IndexedDbPersistenceProvider()
+
+    expect(await quotaProvider.settings.save(defaultAppSettings)).toMatchObject({
+      ok: false,
+      error: { code: 'quota-exceeded' },
+    })
+    put.mockRestore()
   })
 })

@@ -257,4 +257,31 @@ describe('durable restore', () => {
       createTargetOccurrenceKey('coffee', 'usually-1'),
     )
   })
+
+  it('preserves an exact multi-target retry, pause, reload, resume and completion flow', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
+
+    engine.submit({ kind: 'text', value: 'wrong' })
+    engine.submit({ kind: 'text', value: 'usually' })
+    engine.advance()
+    expect(active(engine).currentTargetId).toBe('drink-1')
+    expect(engine.pause().ok).toBe(true)
+    const paused = engine.getState()
+    if (paused.status !== 'paused') throw new Error('Expected paused state')
+
+    const reloaded = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    expect(reloaded.restore({ pack, snapshot: paused.session }).ok).toBe(true)
+    expect(active(reloaded).currentTargetId).toBe('drink-1')
+    reloaded.submit({ kind: 'text', value: 'drink' })
+    reloaded.advance()
+    reloaded.advance()
+
+    expect(reloaded.getState()).toMatchObject({
+      status: 'completed',
+      result: { completedTargets: 2, incorrectAnswers: 1 },
+    })
+    expect(scheduler.calls.map(({ rating }) => rating)).toEqual(['hard', 'good'])
+  })
 })

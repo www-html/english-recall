@@ -3,7 +3,12 @@ import type {
   LessonPack,
   TargetOccurrence,
 } from '../domain/lesson-pack.schema.ts'
-import { getMasteryPercent } from '../learning-engine/index.ts'
+import {
+  getMasteryPercent,
+  MAX_NEW_PER_SESSION,
+  MAX_REVIEW_PER_SESSION,
+  MAX_TOTAL_ACTIVE_TARGETS,
+} from '../learning-engine/index.ts'
 import {
   createReviewKey,
   type LearnerProgress,
@@ -90,7 +95,15 @@ function lessonCounts(
     }
   }
 
-  return { reviewCount, newCount }
+  const boundedReviews = Math.min(reviewCount, MAX_REVIEW_PER_SESSION)
+  return {
+    reviewCount: boundedReviews,
+    newCount: Math.min(
+      newCount,
+      MAX_NEW_PER_SESSION,
+      MAX_TOTAL_ACTIVE_TARGETS - boundedReviews,
+    ),
+  }
 }
 
 /** Selects an existing lesson so a daily session stays safely resumable. */
@@ -116,13 +129,13 @@ export function createDailyLearningPlan(
 
   return (
     candidates.sort((left, right) => {
+      if (right.reviewCount !== left.reviewCount) {
+        return right.reviewCount - left.reviewCount
+      }
       const activeDifference =
         right.reviewCount + right.newCount -
         (left.reviewCount + left.newCount)
       if (activeDifference !== 0) return activeDifference
-      if (right.reviewCount !== left.reviewCount) {
-        return right.reviewCount - left.reviewCount
-      }
       return left.lesson.title.localeCompare(right.lesson.title)
     })[0] ?? null
   )

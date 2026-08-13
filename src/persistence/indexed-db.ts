@@ -3,6 +3,7 @@ import {
   parseLessonPack,
   type LessonPack,
 } from '../domain/lesson-pack.schema.ts'
+import { decideLessonPackUpdate } from '../domain/lesson-pack-update.ts'
 import type {
   AnswerEvaluation,
   AttemptSignal,
@@ -13,11 +14,13 @@ import type {
 import type { Result } from '../shared/types.ts'
 import type {
   AppSettings,
+  BackupRepository,
   LearnerProgress,
   LessonPackCatalog,
   LessonPackRepository,
   PersistenceError,
   PersistenceErrorCode,
+  PersistenceBackup,
   PersistenceProvider,
   ProgressRepository,
   SettingsRepository,
@@ -30,6 +33,8 @@ const keyValueStore = 'key-value'
 const progressKey = 'learner-progress'
 const sessionKey = 'active-session'
 const settingsKey = 'settings'
+export const BACKUP_SCHEMA_VERSION = 1 as const
+const backupFormat = 'english-recall-backup' as const
 
 interface StoredValue {
   readonly key: string
@@ -112,34 +117,14 @@ function isLearnerProgress(value: unknown): value is LearnerProgress {
   )
 }
 
-function migrateLegacyProgress(value: unknown): LearnerProgress | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const progress = value as Record<string, unknown>
-  if (
-    !('schedulesByReviewKey' in progress) ||
-    !isNonNegativeInteger(progress.sessionsCompleted) ||
-    !isNonNegativeInteger(progress.totalAnswers) ||
-    !isNonNegativeInteger(progress.correctAnswers) ||
-    progress.correctAnswers > progress.totalAnswers
-  ) {
-    return undefined
-  }
-
-  // V1 schedules used item ids and cannot be safely mapped to lexemes without
-  // content context. Preserve aggregate history, but intentionally reset SRS.
-  return {
-    schedulesByLexemeReviewKey: {},
-    sessionsCompleted: progress.sessionsCompleted,
-    totalAnswers: progress.totalAnswers,
-    correctAnswers: progress.correctAnswers,
-    ...(isIsoDateTime(progress.lastStudiedAt)
-      ? { lastStudiedAt: progress.lastStudiedAt }
-      : {}),
-  }
-}
-
 function isStringRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actualKeys = Object.keys(value).sort()
+  return actualKeys.length === keys.length &&
+    actualKeys.every((key, index) => key === [...keys].sort()[index])
 }
 
 function isAttemptSummary(value: unknown): value is AttemptSummary {
@@ -314,6 +299,31 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
   return undefined
 }
 
+function isCurrentSettings(value: unknown): value is AppSettings {
+  return (
+    isStringRecord(value) &&
+    hasExactKeys(value, ['learningMode', 'autoAdvance', 'audioEnabled', 'speechRate']) &&
+    normalizeSettings(value) !== undefined
+  )
+}
+
+class OperationQueue {
+  private tail: Promise<void> = Promise.resolve()
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(operation)
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  idle(): Promise<void> {
+    return this.tail
+  }
+}
+
 class IndexedDbConnection {
   private databasePromise: Promise<IDBDatabase> | undefined
 
@@ -378,9 +388,11 @@ async function removeStoredValue(
 
 class IndexedDbLessonPackRepository implements LessonPackRepository {
   private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
 
-  constructor(connection: IndexedDbConnection) {
+  constructor(connection: IndexedDbConnection, operations: OperationQueue) {
     this.connection = connection
+    this.operations = operations
   }
 
   async list(): Promise<Result<LessonPackCatalog, PersistenceError>> {
@@ -464,10 +476,38 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
   async save(pack: LessonPack): Promise<Result<void, PersistenceError>> {
     try {
       const validated = lessonPackSchema.parse(pack)
-      const database = await this.connection.get()
-      const transaction = database.transaction(packStore, 'readwrite')
-      transaction.objectStore(packStore).put(validated)
-      await transactionComplete(transaction)
+      const decision = await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(packStore, 'readwrite')
+        const store = transaction.objectStore(packStore)
+        const existingValue = await requestResult<unknown>(store.get(validated.id))
+        let existing: LessonPack | null = null
+        if (existingValue !== undefined) {
+          try {
+            existing = parseLessonPack(existingValue)
+          } catch {
+            // A valid import may replace a malformed pack with the same id.
+          }
+        }
+        const update = decideLessonPackUpdate(existing, validated)
+        if (update.action === 'install' || update.action === 'replace') {
+          store.put(validated)
+        }
+        await transactionComplete(transaction)
+        return update
+      })
+      if (decision.action === 'reject') {
+        return {
+          ok: false,
+          error: {
+            code: 'invalid-data',
+            message:
+              decision.reason === 'downgrade'
+                ? 'Lesson pack downgrade was rejected'
+                : 'Changed lesson pack content requires a newer semantic version',
+          },
+        }
+      }
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not save lesson pack') }
@@ -476,10 +516,12 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
 
   async remove(id: string): Promise<Result<void, PersistenceError>> {
     try {
-      const database = await this.connection.get()
-      const transaction = database.transaction(packStore, 'readwrite')
-      transaction.objectStore(packStore).delete(id)
-      await transactionComplete(transaction)
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(packStore, 'readwrite')
+        transaction.objectStore(packStore).delete(id)
+        await transactionComplete(transaction)
+      })
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not remove lesson pack') }
@@ -489,24 +531,25 @@ class IndexedDbLessonPackRepository implements LessonPackRepository {
 
 class IndexedDbProgressRepository implements ProgressRepository {
   private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
 
-  constructor(connection: IndexedDbConnection) {
+  constructor(connection: IndexedDbConnection, operations: OperationQueue) {
     this.connection = connection
+    this.operations = operations
   }
 
   async loadProgress(): Promise<Result<LearnerProgress | null, PersistenceError>> {
     try {
+      await this.operations.idle()
       const value = await getStoredValue(this.connection, progressKey)
       if (value === undefined) return ok(null)
       if (!isLearnerProgress(value)) {
-        const migrated = migrateLegacyProgress(value)
-        if (migrated) {
-          await saveStoredValue(this.connection, progressKey, migrated)
-          return ok(migrated)
-        }
         return {
           ok: false,
-          error: { code: 'invalid-data', message: 'Stored progress is invalid' },
+          error: {
+            code: 'invalid-data',
+            message: 'Stored progress is invalid or requires an unsupported migration',
+          },
         }
       }
       return ok(value)
@@ -523,7 +566,9 @@ class IndexedDbProgressRepository implements ProgressRepository {
       }
     }
     try {
-      await saveStoredValue(this.connection, progressKey, progress)
+      await this.operations.run(() =>
+        saveStoredValue(this.connection, progressKey, progress),
+      )
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not save progress') }
@@ -534,11 +579,14 @@ class IndexedDbProgressRepository implements ProgressRepository {
     Result<LearningSessionSnapshot | null, PersistenceError>
   > {
     try {
+      await this.operations.idle()
       const value = await getStoredValue(this.connection, sessionKey)
       if (value === undefined) return ok(null)
       if (!isSessionSnapshot(value)) {
         if (isStringRecord(value) && Array.isArray(value.itemQueue)) {
-          await removeStoredValue(this.connection, sessionKey)
+          await this.operations.run(() =>
+            removeStoredValue(this.connection, sessionKey),
+          )
           return ok(null)
         }
         return {
@@ -562,7 +610,9 @@ class IndexedDbProgressRepository implements ProgressRepository {
       }
     }
     try {
-      await saveStoredValue(this.connection, sessionKey, session)
+      await this.operations.run(() =>
+        saveStoredValue(this.connection, sessionKey, session),
+      )
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not save session') }
@@ -571,19 +621,53 @@ class IndexedDbProgressRepository implements ProgressRepository {
 
   async clearActiveSession(): Promise<Result<void, PersistenceError>> {
     try {
-      await removeStoredValue(this.connection, sessionKey)
+      await this.operations.run(() =>
+        removeStoredValue(this.connection, sessionKey),
+      )
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not clear session') }
+    }
+  }
+
+  async saveLearningState(
+    progress: LearnerProgress,
+    activeSession: LearningSessionSnapshot | null,
+  ): Promise<Result<void, PersistenceError>> {
+    if (!isLearnerProgress(progress) || (activeSession && !isSessionSnapshot(activeSession))) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Learning state is invalid' },
+      }
+    }
+
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(keyValueStore, 'readwrite')
+        const store = transaction.objectStore(keyValueStore)
+        store.put({ key: progressKey, value: progress } satisfies StoredValue)
+        if (activeSession) {
+          store.put({ key: sessionKey, value: activeSession } satisfies StoredValue)
+        } else {
+          store.delete(sessionKey)
+        }
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not save learning state') }
     }
   }
 }
 
 class IndexedDbSettingsRepository implements SettingsRepository {
   private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
 
-  constructor(connection: IndexedDbConnection) {
+  constructor(connection: IndexedDbConnection, operations: OperationQueue) {
     this.connection = connection
+    this.operations = operations
   }
 
   async load(): Promise<Result<AppSettings | null, PersistenceError>> {
@@ -598,7 +682,9 @@ class IndexedDbSettingsRepository implements SettingsRepository {
         }
       }
       if (isStringRecord(value) && !('learningMode' in value)) {
-        await saveStoredValue(this.connection, settingsKey, settings)
+        await this.operations.run(() =>
+          saveStoredValue(this.connection, settingsKey, settings),
+        )
       }
       return ok(settings)
     } catch (error) {
@@ -614,10 +700,269 @@ class IndexedDbSettingsRepository implements SettingsRepository {
       }
     }
     try {
-      await saveStoredValue(this.connection, settingsKey, settings)
+      await this.operations.run(() =>
+        saveStoredValue(this.connection, settingsKey, settings),
+      )
       return ok(undefined)
     } catch (error) {
       return { ok: false, error: toError(error, 'Could not save settings') }
+    }
+  }
+}
+
+function backupValidationError(
+  code: 'invalid-data' | 'unsupported-version',
+  message: string,
+): Result<never, PersistenceError> {
+  return { ok: false, error: { code, message } }
+}
+
+function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceError> {
+  if (!isStringRecord(input)) {
+    return backupValidationError('invalid-data', 'Backup must be an object')
+  }
+  if (input.format !== backupFormat) {
+    return backupValidationError('invalid-data', 'Backup format is invalid')
+  }
+  if (input.schemaVersion !== BACKUP_SCHEMA_VERSION) {
+    return backupValidationError(
+      'unsupported-version',
+      'Backup schema version is not supported',
+    )
+  }
+  if (
+    !hasExactKeys(input, [
+      'format',
+      'schemaVersion',
+      'exportedAt',
+      'lessonPacks',
+      'progress',
+      'activeSession',
+      'settings',
+    ]) ||
+    !isIsoDateTime(input.exportedAt) ||
+    !Array.isArray(input.lessonPacks)
+  ) {
+    return backupValidationError('invalid-data', 'Backup structure is invalid')
+  }
+
+  const packs: LessonPack[] = []
+  for (const value of input.lessonPacks) {
+    const parsed = lessonPackSchema.safeParse(value)
+    if (!parsed.success) {
+      return backupValidationError('invalid-data', 'Backup contains an invalid lesson pack')
+    }
+    packs.push(parsed.data)
+  }
+  if (new Set(packs.map(({ id }) => id)).size !== packs.length) {
+    return backupValidationError('invalid-data', 'Backup contains duplicate lesson pack ids')
+  }
+  if (input.progress !== null && !isLearnerProgress(input.progress)) {
+    return backupValidationError('invalid-data', 'Backup progress is invalid')
+  }
+  if (input.activeSession !== null && !isSessionSnapshot(input.activeSession)) {
+    return backupValidationError('invalid-data', 'Backup active session is invalid')
+  }
+  if (input.settings !== null && !isCurrentSettings(input.settings)) {
+    return backupValidationError('invalid-data', 'Backup settings are invalid')
+  }
+
+  const lexemeReviewKeys = new Set(
+    packs.flatMap((pack) =>
+      pack.lexemes.map((lexeme) => `${pack.id}::${lexeme.id}`),
+    ),
+  )
+  if (
+    input.progress &&
+    !Object.keys(input.progress.schedulesByLexemeReviewKey).every((key) =>
+      lexemeReviewKeys.has(key),
+    )
+  ) {
+    return backupValidationError(
+      'invalid-data',
+      'Backup progress references an unknown lexeme',
+    )
+  }
+
+  if (input.activeSession) {
+    const session = input.activeSession
+    const pack = packs.find(({ id }) => id === session.packId)
+    const lesson = pack?.lessons.find(({ id }) => id === session.lessonId)
+    const sentences = new Map(lesson?.sentences.map((sentence) => [sentence.id, sentence]))
+    const lexemeIds = new Set(pack?.lexemes.map(({ id }) => id))
+    const queueIsValid =
+      new Set(session.sentenceQueue).size === session.sentenceQueue.length &&
+      session.sentenceQueue.every((id) => sentences.has(id))
+    const activeSentenceIds = Object.keys(session.activeTargetIdsBySentenceId)
+    const activeTargetsAreValid = Object.entries(
+      session.activeTargetIdsBySentenceId,
+    ).every(([sentenceId, targetIds]) => {
+      const targetIdSet = new Set(
+        sentences.get(sentenceId)?.targets.map(({ id }) => id),
+      )
+      return (
+        session.sentenceQueue.includes(sentenceId) &&
+        targetIds.every((targetId) => targetIdSet.has(targetId))
+      )
+    })
+    const allQueuedSentencesHaveTargets =
+      activeSentenceIds.length === session.sentenceQueue.length &&
+      session.sentenceQueue.every((id) => activeSentenceIds.includes(id))
+    const activeOccurrenceKeys = new Set(
+      Object.entries(session.activeTargetIdsBySentenceId).flatMap(
+        ([sentenceId, targetIds]) =>
+          targetIds.map((targetId) => `${sentenceId}::${targetId}`),
+      ),
+    )
+    const currentTargets =
+      session.activeTargetIdsBySentenceId[session.currentSentenceId] ?? []
+    const currentSentence = sentences.get(session.currentSentenceId)
+    const currentTargetIsValid =
+      currentSentence?.targets[session.currentTargetIndex]?.id ===
+        session.currentTargetId && currentTargets.includes(session.currentTargetId)
+    const occurrenceRefsAreValid = [
+      ...session.reviewableOccurrenceKeys,
+      ...session.scheduledOccurrenceKeys,
+      ...Object.keys(session.wrongChoiceIdsByOccurrenceKey),
+    ].every((key) => activeOccurrenceKeys.has(key))
+    const wrongChoiceRefsAreValid = Object.values(
+      session.wrongChoiceIdsByOccurrenceKey,
+    ).every((ids) => ids.every((id) => lexemeIds.has(id)))
+    const attemptRefsAreValid = session.attemptHistory.every((attempt) => {
+      const sentence = sentences.get(attempt.sentenceId)
+      const target = sentence?.targets.find(({ id }) => id === attempt.targetId)
+      return target?.lexemeId === attempt.lexemeId
+    })
+    const lexemeRefsAreValid = [
+      ...Object.keys(session.attemptsByLexemeId),
+      ...Object.keys(session.schedulesByLexemeId),
+    ].every((lexemeId) => lexemeIds.has(lexemeId))
+    if (
+      !pack ||
+      !lesson ||
+      !queueIsValid ||
+      !activeTargetsAreValid ||
+      !allQueuedSentencesHaveTargets ||
+      !currentTargetIsValid ||
+      !occurrenceRefsAreValid ||
+      !wrongChoiceRefsAreValid ||
+      !attemptRefsAreValid ||
+      !lexemeRefsAreValid
+    ) {
+      return backupValidationError(
+        'invalid-data',
+        'Backup active session references unknown content',
+      )
+    }
+  }
+
+  return ok({
+    format: backupFormat,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    exportedAt: input.exportedAt,
+    lessonPacks: packs,
+    progress: input.progress,
+    activeSession: input.activeSession,
+    settings: input.settings,
+  })
+}
+
+class IndexedDbBackupRepository implements BackupRepository {
+  private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
+
+  constructor(
+    connection: IndexedDbConnection,
+    operations: OperationQueue,
+  ) {
+    this.connection = connection
+    this.operations = operations
+  }
+
+  async export(): Promise<Result<PersistenceBackup, PersistenceError>> {
+    try {
+      return await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(
+          [packStore, keyValueStore],
+          'readonly',
+        )
+        const packsRequest = transaction.objectStore(packStore).getAll()
+        const keyValues = transaction.objectStore(keyValueStore)
+        const progressRequest = keyValues.get(progressKey)
+        const sessionRequest = keyValues.get(sessionKey)
+        const settingsRequest = keyValues.get(settingsKey)
+        const [lessonPacks, progress, activeSession, settings] = await Promise.all([
+          requestResult<unknown[]>(packsRequest),
+          requestResult<StoredValue | undefined>(progressRequest),
+          requestResult<StoredValue | undefined>(sessionRequest),
+          requestResult<StoredValue | undefined>(settingsRequest),
+        ])
+        const normalizedLessonPacks = lessonPacks.flatMap((value) => {
+          try {
+            return [parseLessonPack(value)]
+          } catch {
+            // Invalid packs are already isolated from the library; keep them
+            // quarantined rather than allowing them to block a valid backup.
+            return []
+          }
+        })
+        return validateBackup({
+          format: backupFormat,
+          schemaVersion: BACKUP_SCHEMA_VERSION,
+          exportedAt: new Date().toISOString(),
+          lessonPacks: normalizedLessonPacks,
+          progress: progress?.value ?? null,
+          activeSession: activeSession?.value ?? null,
+          settings: settings?.value ?? null,
+        })
+      })
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not export backup') }
+    }
+  }
+
+  async restore(backup: unknown): Promise<Result<void, PersistenceError>> {
+    const validated = validateBackup(backup)
+    if (!validated.ok) return validated
+
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(
+          [packStore, keyValueStore],
+          'readwrite',
+        )
+        try {
+          const packs = transaction.objectStore(packStore)
+          const keyValues = transaction.objectStore(keyValueStore)
+          packs.clear()
+          for (const pack of validated.value.lessonPacks) packs.put(pack)
+          keyValues.delete(progressKey)
+          keyValues.delete(sessionKey)
+          keyValues.delete(settingsKey)
+          if (validated.value.progress) {
+            keyValues.put({ key: progressKey, value: validated.value.progress })
+          }
+          if (validated.value.activeSession) {
+            keyValues.put({ key: sessionKey, value: validated.value.activeSession })
+          }
+          if (validated.value.settings) {
+            keyValues.put({ key: settingsKey, value: validated.value.settings })
+          }
+          await transactionComplete(transaction)
+        } catch (error) {
+          try {
+            transaction.abort()
+          } catch {
+            // The transaction may already have aborted itself.
+          }
+          throw error
+        }
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not restore backup') }
     }
   }
 }
@@ -626,11 +971,14 @@ export class IndexedDbPersistenceProvider implements PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
+  readonly backup: BackupRepository
 
   constructor() {
     const connection = new IndexedDbConnection()
-    this.lessonPacks = new IndexedDbLessonPackRepository(connection)
-    this.progress = new IndexedDbProgressRepository(connection)
-    this.settings = new IndexedDbSettingsRepository(connection)
+    const operations = new OperationQueue()
+    this.lessonPacks = new IndexedDbLessonPackRepository(connection, operations)
+    this.progress = new IndexedDbProgressRepository(connection, operations)
+    this.settings = new IndexedDbSettingsRepository(connection, operations)
+    this.backup = new IndexedDbBackupRepository(connection, operations)
   }
 }

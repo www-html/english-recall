@@ -48,6 +48,7 @@ export interface AppSettings {
 export type PersistenceErrorCode =
   | 'not-found'
   | 'invalid-data'
+  | 'unsupported-version'
   | 'quota-exceeded'
   | 'unavailable'
   | 'unknown'
@@ -75,6 +76,10 @@ export interface ProgressRepository {
     session: LearningSessionSnapshot,
   ): Promise<Result<void, PersistenceError>>
   clearActiveSession(): Promise<Result<void, PersistenceError>>
+  saveLearningState(
+    progress: LearnerProgress,
+    activeSession: LearningSessionSnapshot | null,
+  ): Promise<Result<void, PersistenceError>>
 }
 
 export interface SettingsRepository {
@@ -82,10 +87,28 @@ export interface SettingsRepository {
   save(settings: AppSettings): Promise<Result<void, PersistenceError>>
 }
 
+export interface PersistenceBackupV1 {
+  readonly format: 'english-recall-backup'
+  readonly schemaVersion: 1
+  readonly exportedAt: IsoDateTime
+  readonly lessonPacks: readonly LessonPack[]
+  readonly progress: LearnerProgress | null
+  readonly activeSession: LearningSessionSnapshot | null
+  readonly settings: AppSettings | null
+}
+
+export type PersistenceBackup = PersistenceBackupV1
+
+export interface BackupRepository {
+  export(): Promise<Result<PersistenceBackup, PersistenceError>>
+  restore(backup: unknown): Promise<Result<void, PersistenceError>>
+}
+
 export interface PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
+  readonly backup: BackupRepository
 }
 
 export function createReviewKey(

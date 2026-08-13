@@ -63,6 +63,68 @@ describe('session planning', () => {
     )
 
     expect(plan).toMatchObject({ reviewCount: 2 })
-    expect(plan?.newCount).toBe(lexemeIds.length - 2)
+    expect(plan?.newCount).toBe(Math.min(5, lexemeIds.length - 2))
+  })
+
+  it('prefers review work and reports production-bounded daily counts', () => {
+    const sourceLesson = pack.lessons[0]!
+    const reviewLesson = { ...sourceLesson, id: 'reviews', title: 'Reviews' }
+    const newLesson = {
+      ...sourceLesson,
+      id: 'new-heavy',
+      title: 'Many new words',
+      sentences: Array.from({ length: 30 }, (_, index) => ({
+        ...sourceLesson.sentences[0]!,
+        id: `new-sentence-${index}`,
+        targets: sourceLesson.sentences[0]!.targets.map((target) => ({
+          ...target,
+          id: `${target.id}-${index}`,
+          lexemeId: `${target.lexemeId}-${index}`,
+        })),
+      })),
+    }
+    const expandedPack = {
+      ...pack,
+      lexemes: [
+        ...pack.lexemes,
+        ...newLesson.sentences.flatMap((sentence) =>
+          sentence.targets.map((target) => ({
+            ...pack.lexemes.find((lexeme) => lexeme.id === target.lexemeId.split('-').slice(0, -1).join('-'))!,
+            id: target.lexemeId,
+          })),
+        ),
+      ],
+      lessons: [newLesson, reviewLesson],
+    }
+    const reviewLexemeIds = new Set(
+      reviewLesson.sentences.flatMap((sentence) =>
+        sentence.targets.map((target) => target.lexemeId),
+      ),
+    )
+    const progress = {
+      ...createInitialProgress(),
+      schedulesByLexemeReviewKey: Object.fromEntries(
+        [...reviewLexemeIds].map((lexemeId) => [
+          createReviewKey(pack.id, lexemeId),
+          {
+            dueAt: '2026-08-01T00:00:00.000Z',
+            intervalDays: 1,
+            easeFactor: 2.5,
+            repetitions: 1,
+            lapses: 0,
+          },
+        ]),
+      ),
+    }
+
+    const plan = createDailyLearningPlan(
+      [expandedPack],
+      progress,
+      Date.parse('2026-08-13T12:00:00.000Z'),
+    )
+
+    expect(plan?.lesson.id).toBe('reviews')
+    expect(plan?.reviewCount).toBe(reviewLexemeIds.size)
+    expect(plan?.newCount).toBe(0)
   })
 })

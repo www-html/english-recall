@@ -14,6 +14,9 @@ export type {
 export {
   createTargetOccurrenceKey,
   DefaultLearningEngine,
+  MAX_NEW_PER_SESSION,
+  MAX_REVIEW_PER_SESSION,
+  MAX_TOTAL_ACTIVE_TARGETS,
   selectExerciseMode,
 } from './engine.ts'
 export { BasicReviewScheduler, getMasteryPercent } from './scheduler.ts'

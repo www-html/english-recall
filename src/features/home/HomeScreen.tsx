@@ -8,7 +8,7 @@ import {
   Target,
   Upload,
 } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, type KeyboardEvent } from 'react'
 import type { Lesson, LessonPack } from '../../domain/lesson-pack.schema.ts'
 
 export type HomeLearningMode =
@@ -38,6 +38,8 @@ export interface HomeScreenProps {
   readonly onLearningModeChange: (mode: HomeLearningMode) => void
   readonly onStartLesson: (pack: LessonPack, lesson: Lesson) => void
   readonly onImport: (file: File) => void
+  readonly onExportBackup: () => void
+  readonly onRestoreBackup: (file: File) => void
 }
 
 const LEARNING_MODES: ReadonlyArray<{
@@ -49,6 +51,63 @@ const LEARNING_MODES: ReadonlyArray<{
   { value: 'fill-words', label: 'Fill Words' },
   { value: 'listening-choice', label: 'Listening Choice' },
 ]
+
+function LearningModeSelector({
+  value,
+  onChange,
+}: {
+  readonly value: HomeLearningMode
+  readonly onChange: (mode: HomeLearningMode) => void
+}) {
+  const moveFocus = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentIndex: number,
+  ) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? LEARNING_MODES.length - 1
+          : event.key === 'ArrowRight'
+            ? (currentIndex + 1) % LEARNING_MODES.length
+            : (currentIndex - 1 + LEARNING_MODES.length) % LEARNING_MODES.length
+    const nextMode = LEARNING_MODES[nextIndex]
+    const buttons = event.currentTarget.parentElement?.querySelectorAll('button')
+
+    if (!nextMode) return
+    event.preventDefault()
+    onChange(nextMode.value)
+    buttons?.item(nextIndex).focus()
+  }
+
+  return (
+    <div className="home-mode-control">
+      <span id="home-mode-label">Learning mode</span>
+      <div
+        className="home-mode-selector"
+        role="radiogroup"
+        aria-labelledby="home-mode-label"
+      >
+        {LEARNING_MODES.map((mode, index) => (
+          <button
+            className="home-mode-option"
+            type="button"
+            role="radio"
+            aria-checked={value === mode.value}
+            tabIndex={value === mode.value ? 0 : -1}
+            key={mode.value}
+            onClick={() => onChange(mode.value)}
+            onKeyDown={(event) => moveFocus(event, index)}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export function HomeScreen({
   packs,
@@ -65,8 +124,11 @@ export function HomeScreen({
   onLearningModeChange,
   onStartLesson,
   onImport,
+  onExportBackup,
+  onRestoreBackup,
 }: HomeScreenProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const backupInputRef = useRef<HTMLInputElement>(null)
   const totalToday = reviewCount + newCount
   const hasTodayWork = totalToday > 0
 
@@ -94,19 +156,10 @@ export function HomeScreen({
             <p className="eyebrow">Daily recall</p>
             <h1 id="today-title">Today</h1>
           </div>
-          <label className="home-mode-select">
-            <span>Learning mode</span>
-            <select
-              value={learningMode}
-              onChange={(event) =>
-                onLearningModeChange(event.target.value as HomeLearningMode)
-              }
-            >
-              {LEARNING_MODES.map((mode) => (
-                <option value={mode.value} key={mode.value}>{mode.label}</option>
-              ))}
-            </select>
-          </label>
+          <LearningModeSelector
+            value={learningMode}
+            onChange={onLearningModeChange}
+          />
         </div>
 
         <div className="today-card">
@@ -233,6 +286,37 @@ export function HomeScreen({
             ))}
           </div>
         )}
+      </section>
+
+      <section className="local-data-section" aria-labelledby="local-data-title">
+        <div>
+          <p className="eyebrow">Local data</p>
+          <h2 id="local-data-title">Backup and restore</h2>
+          <p>Move your packs, settings, active session, and learning progress safely.</p>
+        </div>
+        <div className="local-data-actions">
+          <input
+            ref={backupInputRef}
+            className="visually-hidden"
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) onRestoreBackup(file)
+              event.target.value = ''
+            }}
+          />
+          <button className="button secondary compact" type="button" onClick={onExportBackup}>
+            Export backup
+          </button>
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={() => backupInputRef.current?.click()}
+          >
+            Restore backup
+          </button>
+        </div>
       </section>
     </main>
   )

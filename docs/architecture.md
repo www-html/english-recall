@@ -59,6 +59,12 @@ rejects invalid references, duplicate ids, mismatched or overlapping spans, and
 unknown fields. Valid schema v2 packs are upgraded losslessly at the parser;
 unsupported versions are rejected.
 
+Pack replacement is conservative: a matching `id` may be re-imported unchanged
+or with a higher semantic `version`. A lower version, or changed content that
+reuses the current version, is rejected. Existing mastery stays keyed to stable
+`packId::lexemeId` values; no mapping is inferred for renamed lexemes. Built-in
+content follows the same policy.
+
 Mastery and SRS schedules are keyed by `packId::lexemeId`. A lexeme may appear
 in many sentence contexts without fragmenting its learning history. Schema
 version 1 generic items are rejected rather than guessed into a lossy context
@@ -83,6 +89,21 @@ model; migration requires an explicit authored mapping.
    completed session clears the resumable snapshot and updates aggregate stats.
 6. The service worker caches the app shell and same-origin runtime assets for
    later offline use.
+
+## Production durability
+
+- Daily sessions are bounded to 20 reviews and 5 new lexemes, with at most 25
+  active targets. Selection order is overdue, weak, due, then new.
+- IndexedDB progress and active-session mutations share an ordered operation
+  queue and the current learning state is committed in one transaction. Backup
+  restore validates everything first and replaces local stores atomically.
+- Backup schema version 1 contains lesson packs, progress/SRS, settings, and an
+  optional active session. Unsupported or malformed backups never partially
+  mutate storage.
+- The Vite base path controls manifest, service-worker, icon, navigation, and
+  asset URLs so root and subpath deployments use the same architecture.
+- An application-level error boundary offers a safe reload without exposing
+  stack traces in the production interface.
 
 ## Deferred decisions
 

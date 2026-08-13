@@ -9,6 +9,7 @@ import {
   type Sentence,
   type TargetOccurrence,
 } from '../domain/lesson-pack.schema.ts'
+import { decideLessonPackUpdate } from '../domain/lesson-pack-update.ts'
 import { HomeScreen } from '../features/home/HomeScreen.tsx'
 import {
   LearningScreen,
@@ -202,7 +203,16 @@ export default function App() {
 
     const bootstrap = async () => {
       const builtInPack = parseLessonPack(starterPackJson)
-      const savedBuiltIn = await provider.lessonPacks.save(builtInPack)
+      const storedBuiltIn = await provider.lessonPacks.get(builtInPack.id)
+      const builtInDecision = decideLessonPackUpdate(
+        storedBuiltIn.ok ? storedBuiltIn.value : null,
+        builtInPack,
+      )
+      const savedBuiltIn =
+        builtInDecision.action === 'install' ||
+        builtInDecision.action === 'replace'
+          ? await provider.lessonPacks.save(builtInPack)
+          : { ok: true as const, value: undefined }
       const [packListResult, progressResult, settingsResult, sessionResult] =
         await Promise.all([
           provider.lessonPacks.list(),
@@ -283,8 +293,14 @@ export default function App() {
       )
       progressRef.current = nextProgress
       setProgress(nextProgress)
-      void provider.progress.saveProgress(nextProgress)
-      void provider.progress.saveActiveSession(engineState.session)
+      void provider.progress
+        .saveLearningState(nextProgress, engineState.session)
+        .then((result) => {
+        if (!result.ok) {
+          setStorageAvailable(false)
+          setNotice(`Learning continues, but the latest progress was not saved: ${result.error.message}`)
+        }
+      })
       return
     }
 
@@ -312,8 +328,12 @@ export default function App() {
       progressRef.current = nextProgress
       setProgress(nextProgress)
       setView('summary')
-      void provider.progress.saveProgress(nextProgress)
-      void provider.progress.clearActiveSession()
+      void provider.progress.saveLearningState(nextProgress, null).then((result) => {
+        if (!result.ok) {
+          setStorageAvailable(false)
+          setNotice(`Session completed, but local storage could not be updated: ${result.error.message}`)
+        }
+      })
     }
   }, [engineState, provider])
 
@@ -382,7 +402,12 @@ export default function App() {
 
   const updateSettings = (next: AppSettings) => {
     setSettings(next)
-    void provider.settings.save(next)
+    void provider.settings.save(next).then((result) => {
+      if (!result.ok) {
+        setStorageAvailable(false)
+        setNotice(`Settings changed for now but could not be saved: ${result.error.message}`)
+      }
+    })
     if (!next.audioEnabled) stopSpeaking()
   }
 
@@ -450,7 +475,12 @@ export default function App() {
     engine.reset()
     setView('home')
     setNotice('Session ended. Completed reviews remain saved.')
-    void provider.progress.clearActiveSession()
+    void provider.progress.clearActiveSession().then((result) => {
+      if (!result.ok) {
+        setStorageAvailable(false)
+        setNotice(`Session ended, but its saved resume state could not be cleared: ${result.error.message}`)
+      }
+    })
   }
 
   const importLessonPack = async (file: File) => {
@@ -461,6 +491,20 @@ export default function App() {
 
     try {
       const importedPack = parseLessonPack(JSON.parse(await file.text()))
+      const currentPack = packs.find((pack) => pack.id === importedPack.id) ?? null
+      const decision = decideLessonPackUpdate(currentPack, importedPack)
+      if (decision.action === 'reject') {
+        setNotice(
+          decision.reason === 'downgrade'
+            ? `Could not import “${importedPack.title}”: version ${importedPack.version} is older than the installed pack.`
+            : `Could not import “${importedPack.title}”: changed content must use a newer semantic version.`,
+        )
+        return
+      }
+      if (decision.action === 'unchanged') {
+        setNotice(`“${importedPack.title}” is already up to date.`)
+        return
+      }
       const saved = await provider.lessonPacks.save(importedPack)
       if (!saved.ok) throw new Error(saved.error.message)
 
@@ -472,6 +516,45 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown import error'
       setNotice(`Could not import JSON pack: ${message}`)
+    }
+  }
+
+  const exportBackup = async () => {
+    const result = await provider.backup.export()
+    if (!result.ok) {
+      setNotice(`Could not export backup: ${result.error.message}`)
+      return
+    }
+
+    const blob = new Blob([JSON.stringify(result.value, null, 2)], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `english-recall-backup-${result.value.exportedAt.slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    setNotice('Backup exported successfully.')
+  }
+
+  const restoreBackup = async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      setNotice('Backup is too large. Maximum size is 10 MB.')
+      return
+    }
+
+    try {
+      const result = await provider.backup.restore(JSON.parse(await file.text()))
+      if (!result.ok) {
+        setNotice(`Could not restore backup: ${result.error.message}`)
+        return
+      }
+      setNotice('Backup restored. Reloading your saved data…')
+      window.location.reload()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid JSON'
+      setNotice(`Could not restore backup: ${message}`)
     }
   }
 
@@ -620,6 +703,8 @@ export default function App() {
       onLearningModeChange={updateHomeLearningMode}
       onStartLesson={startLesson}
       onImport={(file) => void importLessonPack(file)}
+      onExportBackup={() => void exportBackup()}
+      onRestoreBackup={(file) => void restoreBackup(file)}
     />
   )
 }

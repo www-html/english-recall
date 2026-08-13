@@ -26,6 +26,8 @@ function createProps(overrides: Partial<HomeScreenProps> = {}): HomeScreenProps 
     onImport: vi.fn(),
     onExportBackup: vi.fn(),
     onRestoreBackup: vi.fn(),
+    onExportDiagnostics: vi.fn(),
+    onClearDiagnostics: vi.fn(),
     ...overrides,
   }
 }
@@ -99,5 +101,34 @@ describe('HomeScreen daily-first flow', () => {
       target: { files: [backup] },
     })
     expect(onRestoreBackup).toHaveBeenCalledWith(backup)
+  })
+
+  it('exports and confirms before clearing local diagnostics', () => {
+    const onExportDiagnostics = vi.fn()
+    const onClearDiagnostics = vi.fn()
+    render(
+      <HomeScreen
+        {...createProps({ onExportDiagnostics, onClearDiagnostics })}
+      />,
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Export Diagnostics JSON' }),
+    )
+    expect(onExportDiagnostics).toHaveBeenCalledOnce()
+
+    const clearDiagnostics = screen.getByRole('button', {
+      name: 'Clear Diagnostics',
+    })
+    clearDiagnostics.focus()
+    fireEvent.click(clearDiagnostics)
+    expect(onClearDiagnostics).not.toHaveBeenCalled()
+    expect(clearDiagnostics.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(clearDiagnostics)
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Clear local diagnostics?',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(onClearDiagnostics).toHaveBeenCalledOnce()
   })
 })

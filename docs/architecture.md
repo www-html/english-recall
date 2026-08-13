@@ -92,7 +92,7 @@ model; migration requires an explicit authored mapping.
 
 ## Production durability
 
-- Daily sessions are bounded to 20 reviews and 5 new lexemes, with at most 25
+- Each session is bounded to 20 reviews and 5 new lexemes, with at most 25
   active targets. Selection order is overdue, weak, due, then new.
 - IndexedDB progress and active-session mutations share an ordered operation
   queue and the current learning state is committed in one transaction. Backup
@@ -104,6 +104,12 @@ model; migration requires an explicit authored mapping.
   asset URLs so root and subpath deployments use the same architecture.
 - An application-level error boundary offers a safe reload without exposing
   stack traces in the production interface.
+- Diagnostics use their own capped IndexedDB store and are not part of the
+  learner backup transaction. Logging is best-effort, local-only, and contains
+  context identifiers rather than typed answers.
+- Continue Learning starts a new bounded engine session. Review keys completed
+  in the active continuation chain are excluded from later planners; Extra
+  Practice is explicitly non-reviewable and never schedules SRS.
 
 ## Deferred decisions
 

@@ -12,9 +12,13 @@ import type {
   ReviewSchedule,
 } from '../learning-engine/index.ts'
 import type { Result } from '../shared/types.ts'
+import { MAX_DIAGNOSTIC_EVENTS } from './contracts.ts'
 import type {
   AppSettings,
   BackupRepository,
+  DiagnosticEvent,
+  DiagnosticExportV1,
+  DiagnosticRepository,
   LearnerProgress,
   LessonPackCatalog,
   LessonPackRepository,
@@ -27,14 +31,20 @@ import type {
 } from './contracts.ts'
 
 const databaseName = 'english-recall'
-const databaseVersion = 1
+const databaseVersion = 2
 const packStore = 'lesson-packs'
 const keyValueStore = 'key-value'
+const diagnosticStore = 'diagnostics'
 const progressKey = 'learner-progress'
 const sessionKey = 'active-session'
 const settingsKey = 'settings'
 export const BACKUP_SCHEMA_VERSION = 1 as const
 const backupFormat = 'english-recall-backup' as const
+const diagnosticFormat = 'english-recall-diagnostics' as const
+
+interface StoredDiagnosticEvent extends DiagnosticEvent {
+  readonly id?: number
+}
 
 interface StoredValue {
   readonly key: string
@@ -121,6 +131,71 @@ function isStringRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+const diagnosticEventNames = new Set([
+  'session_started',
+  'session_resumed',
+  'session_paused',
+  'session_completed',
+  'session_ended',
+  'target_presented',
+  'answer_incorrect',
+  'answer_correct',
+  'target_skipped',
+  'target_resolved',
+  'sentence_restarted',
+  'srs_committed',
+  'learning_state_saved',
+  'persistence_failed',
+  'session_restore_failed',
+  'session_restored',
+  'lesson_pack_imported',
+  'lesson_pack_rejected',
+  'lesson_pack_updated',
+  'backup_exported',
+  'backup_restore_completed',
+  'backup_restore_failed',
+  'service_worker_registration_failed',
+  'runtime_error',
+])
+
+function isDiagnosticEvent(value: unknown): value is DiagnosticEvent {
+  if (!isStringRecord(value)) return false
+  const metadata = value.metadata
+  return (
+    isIsoDateTime(value.timestamp) &&
+    typeof value.appVersion === 'string' &&
+    value.appVersion.length > 0 &&
+    (value.level === 'info' || value.level === 'warn' || value.level === 'error') &&
+    typeof value.event === 'string' &&
+    diagnosticEventNames.has(value.event) &&
+    [
+      'sessionId',
+      'packId',
+      'lessonId',
+      'sentenceId',
+      'targetId',
+      'lexemeId',
+      'exerciseMode',
+      'learningMode',
+      'phase',
+      'result',
+      'errorCode',
+    ].every((key) => value[key] === undefined || typeof value[key] === 'string') &&
+    (value.responseTimeMs === undefined ||
+      (Number.isFinite(value.responseTimeMs) &&
+        (value.responseTimeMs as number) >= 0)) &&
+    (metadata === undefined ||
+      (isStringRecord(metadata) &&
+        Object.values(metadata).every(
+          (item) =>
+            item === null ||
+            typeof item === 'string' ||
+            (typeof item === 'number' && Number.isFinite(item)) ||
+            typeof item === 'boolean',
+        )))
+  )
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actualKeys = Object.keys(value).sort()
   return actualKeys.length === keys.length &&
@@ -194,6 +269,7 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
   const activeTargets = session.activeTargetIdsBySentenceId
   const reviewableOccurrenceKeys = session.reviewableOccurrenceKeys
   const scheduledOccurrenceKeys = session.scheduledOccurrenceKeys
+  const continuationExcludedReviewKeys = session.continuationExcludedReviewKeys
 
   return (
     typeof session.id === 'string' &&
@@ -230,6 +306,13 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
     new Set(scheduledOccurrenceKeys).size === scheduledOccurrenceKeys.length &&
     typeof session.isPracticeFallback === 'boolean' &&
     (!session.isPracticeFallback || reviewableOccurrenceKeys.length === 0) &&
+    (continuationExcludedReviewKeys === undefined ||
+      (Array.isArray(continuationExcludedReviewKeys) &&
+        continuationExcludedReviewKeys.every(
+          (key) => typeof key === 'string',
+        ) &&
+        new Set(continuationExcludedReviewKeys).size ===
+          continuationExcludedReviewKeys.length)) &&
     Array.isArray(session.solvedTargetIds) &&
     session.solvedTargetIds.every((id) => typeof id === 'string') &&
     (session.phase === 'question' ||
@@ -342,6 +425,12 @@ class IndexedDbConnection {
         }
         if (!database.objectStoreNames.contains(keyValueStore)) {
           database.createObjectStore(keyValueStore, { keyPath: 'key' })
+        }
+        if (!database.objectStoreNames.contains(diagnosticStore)) {
+          database.createObjectStore(diagnosticStore, {
+            keyPath: 'id',
+            autoIncrement: true,
+          })
         }
       }
       request.onsuccess = () => resolve(request.result)
@@ -825,6 +914,9 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
       ...session.scheduledOccurrenceKeys,
       ...Object.keys(session.wrongChoiceIdsByOccurrenceKey),
     ].every((key) => activeOccurrenceKeys.has(key))
+    const continuationRefsAreValid = (
+      session.continuationExcludedReviewKeys ?? []
+    ).every((key) => lexemeReviewKeys.has(key))
     const wrongChoiceRefsAreValid = Object.values(
       session.wrongChoiceIdsByOccurrenceKey,
     ).every((ids) => ids.every((id) => lexemeIds.has(id)))
@@ -845,6 +937,7 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
       !allQueuedSentencesHaveTargets ||
       !currentTargetIsValid ||
       !occurrenceRefsAreValid ||
+      !continuationRefsAreValid ||
       !wrongChoiceRefsAreValid ||
       !attemptRefsAreValid ||
       !lexemeRefsAreValid
@@ -967,18 +1060,126 @@ class IndexedDbBackupRepository implements BackupRepository {
   }
 }
 
+async function deleteOldestDiagnostics(
+  store: IDBObjectStore,
+  count: number,
+): Promise<void> {
+  if (count <= MAX_DIAGNOSTIC_EVENTS) return
+  let remaining = count - MAX_DIAGNOSTIC_EVENTS
+  await new Promise<void>((resolve, reject) => {
+    const request = store.openCursor()
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor || remaining === 0) {
+        resolve()
+        return
+      }
+      cursor.delete()
+      remaining -= 1
+      cursor.continue()
+    }
+  })
+}
+
+class IndexedDbDiagnosticRepository implements DiagnosticRepository {
+  private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
+
+  constructor(connection: IndexedDbConnection, operations: OperationQueue) {
+    this.connection = connection
+    this.operations = operations
+  }
+
+  async append(event: DiagnosticEvent): Promise<Result<void, PersistenceError>> {
+    if (!isDiagnosticEvent(event)) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Diagnostic event is invalid' },
+      }
+    }
+
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(diagnosticStore, 'readwrite')
+        const store = transaction.objectStore(diagnosticStore)
+        store.add(event satisfies StoredDiagnosticEvent)
+        const count = await requestResult(store.count())
+        await deleteOldestDiagnostics(store, count)
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not save diagnostic event') }
+    }
+  }
+
+  async list(): Promise<Result<readonly DiagnosticEvent[], PersistenceError>> {
+    try {
+      await this.operations.idle()
+      const database = await this.connection.get()
+      const transaction = database.transaction(diagnosticStore, 'readonly')
+      const stored = await requestResult<StoredDiagnosticEvent[]>(
+        transaction.objectStore(diagnosticStore).getAll(),
+      )
+      const events = stored.map(({ id: _id, ...event }) => event)
+      if (!events.every(isDiagnosticEvent)) {
+        return {
+          ok: false,
+          error: { code: 'invalid-data', message: 'Stored diagnostics are invalid' },
+        }
+      }
+      return ok(events)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not load diagnostics') }
+    }
+  }
+
+  async export(): Promise<Result<DiagnosticExportV1, PersistenceError>> {
+    const events = await this.list()
+    if (!events.ok) return events
+    return ok({
+      format: diagnosticFormat,
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      events: events.value,
+    })
+  }
+
+  async clear(): Promise<Result<void, PersistenceError>> {
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(diagnosticStore, 'readwrite')
+        transaction.objectStore(diagnosticStore).clear()
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not clear diagnostics') }
+    }
+  }
+}
+
 export class IndexedDbPersistenceProvider implements PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
   readonly backup: BackupRepository
+  readonly diagnostics: DiagnosticRepository
 
   constructor() {
     const connection = new IndexedDbConnection()
     const operations = new OperationQueue()
+    const diagnosticOperations = new OperationQueue()
     this.lessonPacks = new IndexedDbLessonPackRepository(connection, operations)
     this.progress = new IndexedDbProgressRepository(connection, operations)
     this.settings = new IndexedDbSettingsRepository(connection, operations)
     this.backup = new IndexedDbBackupRepository(connection, operations)
+    this.diagnostics = new IndexedDbDiagnosticRepository(
+      connection,
+      diagnosticOperations,
+    )
   }
 }

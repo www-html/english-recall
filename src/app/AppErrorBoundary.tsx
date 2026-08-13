@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { recordLocalDiagnostic } from '../persistence/diagnostics.ts'
 
 interface AppErrorBoundaryProps {
   readonly children: ReactNode
@@ -20,6 +21,12 @@ export class AppErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    recordLocalDiagnostic({
+      level: 'error',
+      event: 'runtime_error',
+      errorCode: error.name,
+      metadata: { componentStackAvailable: Boolean(info.componentStack) },
+    })
     if (import.meta.env.DEV) console.error('Application render failed', error, info)
   }
 

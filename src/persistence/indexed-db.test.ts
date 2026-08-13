@@ -2,7 +2,12 @@ import 'fake-indexeddb/auto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { LessonPack } from '../domain/lesson-pack.schema.ts'
 import type { LearningSessionSnapshot } from '../learning-engine/index.ts'
-import { createInitialProgress, defaultAppSettings } from './contracts.ts'
+import {
+  createInitialProgress,
+  defaultAppSettings,
+  MAX_DIAGNOSTIC_EVENTS,
+  type DiagnosticEvent,
+} from './contracts.ts'
 import {
   BACKUP_SCHEMA_VERSION,
   IndexedDbPersistenceProvider,
@@ -66,6 +71,7 @@ const session: LearningSessionSnapshot = {
   reviewableOccurrenceKeys: ['sentence-one::target-hello'],
   scheduledOccurrenceKeys: [],
   isPracticeFallback: false,
+  continuationExcludedReviewKeys: ['persistence-pack::thanks'],
   solvedTargetIds: [],
   phase: 'question',
   learningMode: 'auto',
@@ -110,6 +116,17 @@ const session: LearningSessionSnapshot = {
   updatedAt: '2026-08-12T12:00:00.000Z',
 }
 
+function diagnosticEvent(index: number): DiagnosticEvent {
+  return {
+    timestamp: new Date(Date.UTC(2026, 7, 13, 12, 0, index)).toISOString(),
+    appVersion: '0.1.0',
+    level: 'info',
+    event: index % 2 === 0 ? 'target_presented' : 'learning_state_saved',
+    sessionId: 'session-one',
+    targetId: `target-${index}`,
+  }
+}
+
 function deleteTestDatabase(): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase('english-recall')
@@ -120,7 +137,7 @@ function deleteTestDatabase(): Promise<void> {
 
 function writeRawKey(key: string, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('english-recall', 1)
+    const request = indexedDB.open('english-recall', 2)
     request.onerror = () => reject(request.error)
     request.onsuccess = () => {
       const database = request.result
@@ -137,7 +154,7 @@ function writeRawKey(key: string, value: unknown): Promise<void> {
 
 function writeRawPack(value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('english-recall', 1)
+    const request = indexedDB.open('english-recall', 2)
     request.onerror = () => reject(request.error)
     request.onsuccess = () => {
       const database = request.result
@@ -438,7 +455,11 @@ describe('IndexedDbPersistenceProvider', () => {
         },
       ],
     }
-    const compatibleSession = { ...mixedSession, packId: mixedPack.id }
+    const compatibleSession = {
+      ...mixedSession,
+      packId: mixedPack.id,
+      continuationExcludedReviewKeys: [`${mixedPack.id}::thanks`],
+    }
     await provider.lessonPacks.save(mixedPack)
     await provider.progress.saveActiveSession(compatibleSession)
     expect(await provider.backup.export()).toMatchObject({ ok: true })
@@ -656,6 +677,53 @@ describe('IndexedDbPersistenceProvider', () => {
       error: { code: 'unavailable' },
     })
     vi.unstubAllGlobals()
+  })
+
+  it('writes, reads, exports and clears structured diagnostics separately', async () => {
+    await provider.diagnostics.clear()
+    const event = diagnosticEvent(1)
+    expect(await provider.diagnostics.append(event)).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(await provider.diagnostics.list()).toEqual({ ok: true, value: [event] })
+    expect(await provider.diagnostics.export()).toMatchObject({
+      ok: true,
+      value: {
+        format: 'english-recall-diagnostics',
+        schemaVersion: 1,
+        events: [event],
+      },
+    })
+
+    await provider.progress.saveProgress(createInitialProgress())
+    await provider.progress.clearActiveSession()
+    await provider.settings.save(defaultAppSettings)
+    const normalBackup = await provider.backup.export()
+    expect(normalBackup).toMatchObject({ ok: true })
+    if (normalBackup.ok) {
+      expect(normalBackup.value).not.toHaveProperty('diagnostics')
+    }
+
+    expect(await provider.diagnostics.clear()).toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(await provider.diagnostics.list()).toEqual({ ok: true, value: [] })
+  })
+
+  it('caps diagnostic history at the newest 3000 events', async () => {
+    await provider.diagnostics.clear()
+    for (let index = 0; index <= MAX_DIAGNOSTIC_EVENTS; index += 1) {
+      const saved = await provider.diagnostics.append(diagnosticEvent(index))
+      if (!saved.ok) throw new Error(saved.error.message)
+    }
+
+    const listed = await provider.diagnostics.list()
+    if (!listed.ok) throw new Error(listed.error.message)
+    expect(listed.value).toHaveLength(MAX_DIAGNOSTIC_EVENTS)
+    expect(listed.value[0]?.targetId).toBe('target-1')
+    expect(listed.value.at(-1)?.targetId).toBe(`target-${MAX_DIAGNOSTIC_EVENTS}`)
   })
 
   it('surfaces quota errors from durable writes', async () => {

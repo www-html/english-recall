@@ -5,14 +5,16 @@ interface SummaryScreenProps {
   readonly lessonTitle: string
   readonly result: SessionResult
   readonly onHome: () => void
-  readonly onRepeat: () => void
+  readonly nextActionLabel: 'Continue Learning' | 'Extra Practice'
+  readonly onNext: () => void
 }
 
 export function SummaryScreen({
   lessonTitle,
   result,
   onHome,
-  onRepeat,
+  nextActionLabel,
+  onNext,
 }: SummaryScreenProps) {
   return (
     <main className="centered-page summary-page">
@@ -38,8 +40,15 @@ export function SummaryScreen({
         </div>
 
         <div className="summary-actions">
-          <button className="button primary" type="button" onClick={onHome}>Back to Home <ArrowRight size={18} aria-hidden="true" /></button>
-          <button className="button secondary" type="button" onClick={onRepeat}><RotateCcw size={17} aria-hidden="true" /> Repeat lesson</button>
+          <button className="button primary" type="button" onClick={onNext}>
+            {nextActionLabel}
+            {nextActionLabel === 'Continue Learning'
+              ? <ArrowRight size={18} aria-hidden="true" />
+              : <RotateCcw size={17} aria-hidden="true" />}
+          </button>
+          <button className="button secondary" type="button" onClick={onHome}>
+            <Home size={17} aria-hidden="true" /> Back to Home
+          </button>
         </div>
         <span className="home-label"><Home size={14} aria-hidden="true" /> Progress saved on this device</span>
       </section>

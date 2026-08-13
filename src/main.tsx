@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './app/App.tsx'
 import { AppErrorBoundary } from './app/AppErrorBoundary.tsx'
+import { recordLocalDiagnostic } from './persistence/diagnostics.ts'
 import './index.css'
 
 const rootElement = document.getElementById('root')
@@ -22,9 +23,16 @@ createRoot(rootElement).render(
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register(
-      `${import.meta.env.BASE_URL}service-worker.js`,
-      { scope: import.meta.env.BASE_URL },
-    )
+    void navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}service-worker.js`, {
+        scope: import.meta.env.BASE_URL,
+      })
+      .catch(() => {
+        recordLocalDiagnostic({
+          level: 'error',
+          event: 'service_worker_registration_failed',
+          errorCode: 'registration-failed',
+        })
+      })
   })
 }

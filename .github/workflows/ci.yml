@@ -36,5 +36,17 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build
-        run: npm run build
+      - name: Validate bundled content
+        run: npm run validate:content
+
+      - name: Build and verify root PWA
+        run: |
+          npm run build
+          node scripts/verify-pwa.mjs dist /
+
+      - name: Build and verify subpath PWA
+        env:
+          VITE_BASE_PATH: /english-recall/
+        run: |
+          npm run build
+          node scripts/verify-pwa.mjs dist /english-recall/

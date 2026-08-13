@@ -30,6 +30,9 @@ export interface StartSessionRequest {
   >
   readonly learningMode?: LearningMode
   readonly now?: IsoDateTime
+  readonly excludedLexemeIds?: readonly LexemeId[]
+  readonly continuationExcludedReviewKeys?: readonly string[]
+  readonly practiceOnly?: boolean
 }
 
 export interface RestoreSessionRequest {

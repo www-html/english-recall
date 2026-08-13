@@ -127,4 +127,43 @@ describe('session planning', () => {
     expect(plan?.reviewCount).toBe(reviewLexemeIds.size)
     expect(plan?.newCount).toBe(0)
   })
+
+  it('selects remaining work after a completed bounded session', () => {
+    const lesson = pack.lessons[0]!
+    const lexemeIds = [
+      ...new Set(
+        lesson.sentences.flatMap((sentence) =>
+          sentence.targets.map((target) => target.lexemeId),
+        ),
+      ),
+    ]
+    const excluded = new Set(
+      lexemeIds.slice(0, 1).map((lexemeId) => createReviewKey(pack.id, lexemeId)),
+    )
+
+    const remaining = createDailyLearningPlan(
+      [{ ...pack, lessons: [lesson] }],
+      createInitialProgress(),
+      Date.parse('2026-08-13T12:00:00.000Z'),
+      excluded,
+      true,
+    )
+
+    expect(remaining).not.toBeNull()
+    expect(remaining!.newCount).toBe(
+      Math.min(5, Math.max(0, lexemeIds.length - excluded.size)),
+    )
+    const allExcluded = new Set(
+      lexemeIds.map((lexemeId) => createReviewKey(pack.id, lexemeId)),
+    )
+    expect(
+      createDailyLearningPlan(
+        [{ ...pack, lessons: [lesson] }],
+        createInitialProgress(),
+        Date.parse('2026-08-13T12:00:00.000Z'),
+        allExcluded,
+        true,
+      ),
+    ).toBeNull()
+  })
 })

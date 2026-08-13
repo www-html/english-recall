@@ -104,11 +104,78 @@ export interface BackupRepository {
   restore(backup: unknown): Promise<Result<void, PersistenceError>>
 }
 
+export const MAX_DIAGNOSTIC_EVENTS = 3_000
+
+export type DiagnosticLevel = 'info' | 'warn' | 'error'
+
+export type DiagnosticEventName =
+  | 'session_started'
+  | 'session_resumed'
+  | 'session_paused'
+  | 'session_completed'
+  | 'session_ended'
+  | 'target_presented'
+  | 'answer_incorrect'
+  | 'answer_correct'
+  | 'target_skipped'
+  | 'target_resolved'
+  | 'sentence_restarted'
+  | 'srs_committed'
+  | 'learning_state_saved'
+  | 'persistence_failed'
+  | 'session_restore_failed'
+  | 'session_restored'
+  | 'lesson_pack_imported'
+  | 'lesson_pack_rejected'
+  | 'lesson_pack_updated'
+  | 'backup_exported'
+  | 'backup_restore_completed'
+  | 'backup_restore_failed'
+  | 'service_worker_registration_failed'
+  | 'runtime_error'
+
+export type DiagnosticMetadataValue = string | number | boolean | null
+
+export interface DiagnosticEvent {
+  readonly timestamp: IsoDateTime
+  readonly appVersion: string
+  readonly level: DiagnosticLevel
+  readonly event: DiagnosticEventName
+  readonly sessionId?: string
+  readonly packId?: LessonPackId
+  readonly lessonId?: string
+  readonly sentenceId?: string
+  readonly targetId?: string
+  readonly lexemeId?: LexemeId
+  readonly exerciseMode?: string
+  readonly learningMode?: LearningMode
+  readonly phase?: string
+  readonly result?: string
+  readonly errorCode?: string
+  readonly responseTimeMs?: number
+  readonly metadata?: Readonly<Record<string, DiagnosticMetadataValue>>
+}
+
+export interface DiagnosticExportV1 {
+  readonly format: 'english-recall-diagnostics'
+  readonly schemaVersion: 1
+  readonly exportedAt: IsoDateTime
+  readonly events: readonly DiagnosticEvent[]
+}
+
+export interface DiagnosticRepository {
+  append(event: DiagnosticEvent): Promise<Result<void, PersistenceError>>
+  list(): Promise<Result<readonly DiagnosticEvent[], PersistenceError>>
+  export(): Promise<Result<DiagnosticExportV1, PersistenceError>>
+  clear(): Promise<Result<void, PersistenceError>>
+}
+
 export interface PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
   readonly backup: BackupRepository
+  readonly diagnostics: DiagnosticRepository
 }
 
 export function createReviewKey(

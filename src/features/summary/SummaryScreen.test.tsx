@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionResult } from '../../learning-engine/index.ts'
 import { SummaryScreen } from './SummaryScreen.tsx'
@@ -26,7 +26,8 @@ describe('SummaryScreen result semantics', () => {
         lessonTitle="Daily English"
         result={result}
         onHome={vi.fn()}
-        onRepeat={vi.fn()}
+        nextActionLabel="Continue Learning"
+        onNext={vi.fn()}
       />,
     )
 
@@ -52,11 +53,38 @@ describe('SummaryScreen result semantics', () => {
         lessonTitle="Practice"
         result={result}
         onHome={vi.fn()}
-        onRepeat={vi.fn()}
+        nextActionLabel="Extra Practice"
+        onNext={vi.fn()}
       />,
     )
 
     expect(screen.getByText(/review schedule did not change/)).toBeTruthy()
     expect(screen.queryByText(/next review is now scheduled/)).toBeNull()
+  })
+
+  it('uses the provided next bounded-session action', () => {
+    const onNext = vi.fn()
+    render(
+      <SummaryScreen
+        lessonTitle="Daily English"
+        result={{
+          reviewedLexemes: 1,
+          completedTargets: 1,
+          difficultLexemes: 0,
+          correctAnswers: 1,
+          incorrectAnswers: 0,
+          skippedTargets: 0,
+          practiceTargets: 0,
+          accuracyPercent: 100,
+          completedAt: '2026-08-13T00:00:00.000Z',
+        }}
+        onHome={vi.fn()}
+        nextActionLabel="Continue Learning"
+        onNext={onNext}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Continue Learning/ }))
+    expect(onNext).toHaveBeenCalledOnce()
   })
 })

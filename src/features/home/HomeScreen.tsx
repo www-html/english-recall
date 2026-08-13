@@ -4,11 +4,13 @@ import {
   BrainCircuit,
   Clock3,
   Database,
+  Download,
   Sparkles,
   Target,
+  Trash2,
   Upload,
 } from 'lucide-react'
-import { useRef, type KeyboardEvent } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import type { Lesson, LessonPack } from '../../domain/lesson-pack.schema.ts'
 
 export type HomeLearningMode =
@@ -40,6 +42,8 @@ export interface HomeScreenProps {
   readonly onImport: (file: File) => void
   readonly onExportBackup: () => void
   readonly onRestoreBackup: (file: File) => void
+  readonly onExportDiagnostics: () => void
+  readonly onClearDiagnostics: () => void
 }
 
 const LEARNING_MODES: ReadonlyArray<{
@@ -126,9 +130,12 @@ export function HomeScreen({
   onImport,
   onExportBackup,
   onRestoreBackup,
+  onExportDiagnostics,
+  onClearDiagnostics,
 }: HomeScreenProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const backupInputRef = useRef<HTMLInputElement>(null)
+  const [confirmDiagnosticsClear, setConfirmDiagnosticsClear] = useState(false)
   const totalToday = reviewCount + newCount
   const hasTodayWork = totalToday > 0
 
@@ -316,6 +323,49 @@ export function HomeScreen({
           >
             Restore backup
           </button>
+          <span className="local-data-divider" aria-hidden="true" />
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={onExportDiagnostics}
+          >
+            <Download size={15} aria-hidden="true" /> Export Diagnostics JSON
+          </button>
+          <button
+            className="button secondary compact"
+            type="button"
+            aria-controls="diagnostic-clear-confirmation"
+            aria-expanded={confirmDiagnosticsClear}
+            onClick={() => setConfirmDiagnosticsClear(true)}
+          >
+            <Trash2 size={15} aria-hidden="true" /> Clear Diagnostics
+          </button>
+          {confirmDiagnosticsClear && (
+            <span
+              className="diagnostic-clear-confirmation"
+              id="diagnostic-clear-confirmation"
+              role="alert"
+            >
+              <span>Clear local diagnostics?</span>
+              <button
+                className="button secondary compact"
+                type="button"
+                onClick={() => setConfirmDiagnosticsClear(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button danger compact"
+                type="button"
+                onClick={() => {
+                  onClearDiagnostics()
+                  setConfirmDiagnosticsClear(false)
+                }}
+              >
+                Clear
+              </button>
+            </span>
+          )}
         </div>
       </section>
     </main>

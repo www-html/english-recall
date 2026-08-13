@@ -106,6 +106,30 @@ function activeCount(session: LearningSessionSnapshot): number {
   )
 }
 
+function completeSession(
+  engine: DefaultLearningEngine,
+  pack: LessonPack,
+): LearningSessionSnapshot {
+  for (let guard = 0; guard < 200; guard += 1) {
+    const state = engine.getState()
+    if (state.status === 'completed') return state.session
+    if (state.status !== 'active') throw new Error('Expected active session')
+    if (state.session.phase === 'question') {
+      const lesson = pack.lessons.find(({ id }) => id === state.session.lessonId)!
+      const sentence = lesson.sentences.find(
+        ({ id }) => id === state.session.currentSentenceId,
+      )!
+      const target = sentence.targets[state.session.currentTargetIndex]!
+      const result = engine.submit({ kind: 'text', value: target.surfaceText })
+      if (!result.ok) throw new Error(result.error.message)
+    } else {
+      const result = engine.advance()
+      if (!result.ok) throw new Error(result.error.message)
+    }
+  }
+  throw new Error('Session did not complete')
+}
+
 describe('daily session limits', () => {
   it('caps many new lexemes at the new-word boundary', () => {
     const pack = makePack(
@@ -211,6 +235,94 @@ describe('deterministic priority and deduplication', () => {
         targetIds.map((targetId) => `${sentenceId}::${targetId}`),
     )
     expect(new Set(activeIds).size).toBe(activeIds.length)
+  })
+})
+
+describe('bounded continuation sessions', () => {
+  it('starts new same-day sessions from remaining targets, then safe practice', () => {
+    const pack = makePack(
+      Array.from({ length: 12 }, (_, index) => makeSentence(index, [`new-${index}`])),
+    )
+    const firstEngine = new DefaultLearningEngine()
+    const firstStart = firstEngine.start({
+      pack,
+      lessonId: 'selected',
+      learningMode: 'fill-words',
+      now,
+    })
+    if (!firstStart.ok) throw new Error(firstStart.error.message)
+    const first = completeSession(firstEngine, pack)
+    const firstLexemes = Object.keys(first.attemptsByLexemeId)
+    expect(firstLexemes).toHaveLength(MAX_NEW_PER_SESSION)
+
+    const secondEngine = new DefaultLearningEngine()
+    const secondStart = secondEngine.start({
+      pack,
+      lessonId: 'selected',
+      learningMode: 'fill-words',
+      schedulesByLexemeId: first.schedulesByLexemeId,
+      excludedLexemeIds: firstLexemes,
+      continuationExcludedReviewKeys: firstLexemes.map(
+        (id) => `${pack.id}::${id}`,
+      ),
+      now,
+    })
+    if (!secondStart.ok || secondStart.value.current.status !== 'active') {
+      throw new Error('Expected second active session')
+    }
+    expect(secondStart.value.current.session.id).not.toBe(first.id)
+    const second = completeSession(secondEngine, pack)
+    const secondLexemes = Object.keys(second.attemptsByLexemeId)
+    expect(secondLexemes).toHaveLength(MAX_NEW_PER_SESSION)
+    expect(secondLexemes.some((id) => firstLexemes.includes(id))).toBe(false)
+    expect(second.startedAt).toBe(now)
+
+    const excluded = [...firstLexemes, ...secondLexemes]
+    const thirdEngine = new DefaultLearningEngine()
+    const thirdStart = thirdEngine.start({
+      pack,
+      lessonId: 'selected',
+      learningMode: 'fill-words',
+      schedulesByLexemeId: {
+        ...first.schedulesByLexemeId,
+        ...second.schedulesByLexemeId,
+      },
+      excludedLexemeIds: excluded,
+      now,
+    })
+    if (!thirdStart.ok || thirdStart.value.current.status !== 'active') {
+      throw new Error('Expected third active session')
+    }
+    expect(activeCount(thirdStart.value.current.session)).toBe(2)
+    const third = completeSession(thirdEngine, pack)
+    expect(third.startedAt).toBe(now)
+
+    const practiceEngine = new DefaultLearningEngine()
+    const practiceStart = practiceEngine.start({
+      pack,
+      lessonId: 'selected',
+      learningMode: 'fill-words',
+      schedulesByLexemeId: third.schedulesByLexemeId,
+      practiceOnly: true,
+      now,
+    })
+    if (!practiceStart.ok || practiceStart.value.current.status !== 'active') {
+      throw new Error('Expected practice session')
+    }
+    const practice = practiceStart.value.current.session
+    expect(practice.isPracticeFallback).toBe(true)
+    expect(practice.reviewableOccurrenceKeys).toEqual([])
+    const lesson = pack.lessons[0]!
+    const sentence = lesson.sentences.find(
+      ({ id }) => id === practice.currentSentenceId,
+    )!
+    const target = sentence.targets[practice.currentTargetIndex]!
+    practiceEngine.submit({ kind: 'text', value: target.surfaceText })
+    const afterPractice = practiceEngine.getState()
+    if (afterPractice.status !== 'active') throw new Error('Expected practice')
+    expect(afterPractice.session.schedulesByLexemeId).toEqual(
+      practice.schedulesByLexemeId,
+    )
   })
 })
 

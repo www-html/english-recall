@@ -147,32 +147,38 @@ function createSessionPlan(
   lesson: Lesson,
   schedules: Readonly<Record<LexemeId, ReviewSchedule>>,
   now: string,
+  excludedLexemeIds: readonly LexemeId[] = [],
+  practiceOnly = false,
 ): SessionPlan {
   const nowTime = Date.parse(now)
+  const excluded = new Set(excludedLexemeIds)
   const seenLexemes = new Set<LexemeId>()
   const active: Record<SentenceId, string[]> = {}
   const reviewableKeys: string[] = []
 
-  const candidates = lesson.sentences.flatMap((sentence, sentenceIndex) =>
-    sentence.targets
-      .map((target, targetIndex): SessionCandidate | undefined => {
-        const schedule = schedules[target.lexemeId]
-        const priority = candidatePriority(schedule, nowTime)
-        return priority === undefined
-          ? undefined
-          : {
-              sentence,
-              sentenceIndex,
-              target,
-              targetIndex,
-              priority,
-              dueAt: schedule
-                ? Date.parse(schedule.dueAt)
-                : Number.POSITIVE_INFINITY,
-            }
-      })
-      .filter((candidate): candidate is SessionCandidate => Boolean(candidate)),
-  )
+  const candidates = practiceOnly
+    ? []
+    : lesson.sentences.flatMap((sentence, sentenceIndex) =>
+        sentence.targets
+          .map((target, targetIndex): SessionCandidate | undefined => {
+            if (excluded.has(target.lexemeId)) return undefined
+            const schedule = schedules[target.lexemeId]
+            const priority = candidatePriority(schedule, nowTime)
+            return priority === undefined
+              ? undefined
+              : {
+                  sentence,
+                  sentenceIndex,
+                  target,
+                  targetIndex,
+                  priority,
+                  dueAt: schedule
+                    ? Date.parse(schedule.dueAt)
+                    : Number.POSITIVE_INFINITY,
+                }
+          })
+          .filter((candidate): candidate is SessionCandidate => Boolean(candidate)),
+      )
 
   let newCount = 0
   let reviewCount = 0
@@ -286,6 +292,13 @@ function snapshotMatchesPack(
     !snapshot.activeTargetIdsBySentenceId ||
     !Array.isArray(snapshot.reviewableOccurrenceKeys) ||
     !Array.isArray(snapshot.scheduledOccurrenceKeys) ||
+    (snapshot.continuationExcludedReviewKeys !== undefined &&
+      (!Array.isArray(snapshot.continuationExcludedReviewKeys) ||
+        snapshot.continuationExcludedReviewKeys.some(
+          (key) => typeof key !== 'string',
+        ) ||
+        new Set(snapshot.continuationExcludedReviewKeys).size !==
+          snapshot.continuationExcludedReviewKeys.length)) ||
     typeof snapshot.isPracticeFallback !== 'boolean'
   ) {
     return false
@@ -419,7 +432,13 @@ export class DefaultLearningEngine implements LearningEngine {
     if (!lesson) return failure('lesson-not-found', 'Lesson was not found')
     const now = request.now ?? this.clock.now()
     const schedules = request.schedulesByLexemeId ?? {}
-    const plan = createSessionPlan(lesson, schedules, now)
+    const plan = createSessionPlan(
+      lesson,
+      schedules,
+      now,
+      request.excludedLexemeIds,
+      request.practiceOnly,
+    )
     const sentenceQueue = this.sentenceSelector.select({
       packId: request.pack.id,
       lessonId: lesson.id,
@@ -453,6 +472,8 @@ export class DefaultLearningEngine implements LearningEngine {
           reviewableOccurrenceKeys: plan.reviewableOccurrenceKeys,
           scheduledOccurrenceKeys: [],
           isPracticeFallback: plan.isPracticeFallback,
+          continuationExcludedReviewKeys:
+            request.continuationExcludedReviewKeys ?? [],
           solvedTargetIds: [],
           phase: 'question',
           learningMode,

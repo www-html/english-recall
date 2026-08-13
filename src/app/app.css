@@ -416,6 +416,28 @@
   flex-wrap: wrap;
 }
 
+.local-data-divider {
+  width: 1px;
+  min-height: 2rem;
+  background: var(--border);
+}
+
+.diagnostic-clear-confirmation {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--muted-bright);
+  font-size: 0.72rem;
+}
+
+@media (max-width: 599px) {
+  .local-data-divider {
+    width: 100%;
+    min-height: 1px;
+  }
+}
+
 @media (min-width: 600px) {
   .local-data-section {
     flex-direction: row;

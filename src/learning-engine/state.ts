@@ -88,6 +88,8 @@ export interface LearningSessionSnapshot {
   /** Durable idempotency guard: each occurrence can schedule at most once. */
   readonly scheduledOccurrenceKeys: readonly string[]
   readonly isPracticeFallback: boolean
+  /** Review keys already resolved in the current Continue Learning chain. */
+  readonly continuationExcludedReviewKeys?: readonly string[]
   readonly solvedTargetIds: readonly TargetOccurrenceId[]
   readonly phase: 'question' | 'target-feedback' | 'sentence-complete'
   readonly learningMode: LearningMode

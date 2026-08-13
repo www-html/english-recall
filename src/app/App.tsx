@@ -29,11 +29,13 @@ import {
 } from '../learning-engine/index.ts'
 import {
   createInitialProgress,
+  createDiagnosticRecorder,
   createReviewKey,
   defaultAppSettings,
   IndexedDbPersistenceProvider,
   type AppSettings,
   type LearnerProgress,
+  type DiagnosticInput,
 } from '../persistence/index.ts'
 import './app.css'
 import {
@@ -41,6 +43,7 @@ import {
   createStableChoices,
 } from './session-planning.ts'
 import { getSlowerSpeechRate, useSpeech } from './use-speech.ts'
+import { diagnosticsForAttemptTransition } from './session-diagnostics.ts'
 
 type AppView = 'home' | 'learning' | 'pause' | 'summary'
 
@@ -51,6 +54,46 @@ interface SessionContext {
   readonly target: TargetOccurrence
   readonly lexeme: Lexeme
   readonly choices: readonly ChoiceOption[]
+}
+
+interface StartLessonOptions {
+  readonly excludedReviewKeys?: readonly string[]
+  readonly practiceOnly?: boolean
+}
+
+function diagnosticSessionContext(
+  session: LearningSessionSnapshot,
+): Pick<
+  DiagnosticInput,
+  | 'sessionId'
+  | 'packId'
+  | 'lessonId'
+  | 'sentenceId'
+  | 'targetId'
+  | 'exerciseMode'
+  | 'learningMode'
+  | 'phase'
+> {
+  return {
+    sessionId: session.id,
+    packId: session.packId,
+    lessonId: session.lessonId,
+    sentenceId: session.currentSentenceId,
+    targetId: session.currentTargetId,
+    exerciseMode: session.exerciseMode,
+    learningMode: session.learningMode,
+    phase: session.phase,
+  }
+}
+
+function sessionFromState(
+  state: LearningEngineState,
+): LearningSessionSnapshot | undefined {
+  return state.status === 'active' ||
+    state.status === 'paused' ||
+    state.status === 'completed'
+    ? state.session
+    : undefined
 }
 
 function schedulesForSession(
@@ -175,6 +218,10 @@ function feedbackForSession(
 
 export default function App() {
   const provider = useMemo(() => new IndexedDbPersistenceProvider(), [])
+  const recordDiagnostic = useMemo(
+    () => createDiagnosticRecorder(provider.diagnostics, __APP_VERSION__),
+    [provider],
+  )
   const engine = useMemo(() => new DefaultLearningEngine(), [])
   const {
     supported: speechSupported,
@@ -195,6 +242,8 @@ export default function App() {
   const [notice, setNotice] = useState<string>()
   const completedSessions = useRef(new Set<string>())
   const lastAutoSpokenQuestion = useRef<string | undefined>(undefined)
+  const lastPresentedQuestion = useRef<string | undefined>(undefined)
+  const previousEngineState = useRef<LearningEngineState>({ status: 'idle' })
 
   useEffect(() => engine.subscribe(setEngineState), [engine])
 
@@ -269,9 +318,39 @@ export default function App() {
             pack: savedPack,
             snapshot: sessionResult.value,
           })
-          if (!restored.ok) void provider.progress.clearActiveSession()
+          if (restored.ok && restored.value.current.status === 'active') {
+            recordDiagnostic({
+              level: 'info',
+              event: 'session_restored',
+              ...diagnosticSessionContext(restored.value.current.session),
+            })
+          } else if (!restored.ok) {
+            recordDiagnostic({
+              level: 'error',
+              event: 'session_restore_failed',
+              sessionId: sessionResult.value.id,
+              packId: sessionResult.value.packId,
+              lessonId: sessionResult.value.lessonId,
+              errorCode: restored.error.code,
+            })
+            void provider.progress.clearActiveSession()
+          }
+        } else {
+          recordDiagnostic({
+            level: 'error',
+            event: 'session_restore_failed',
+            sessionId: sessionResult.value.id,
+            packId: sessionResult.value.packId,
+            lessonId: sessionResult.value.lessonId,
+            errorCode: 'pack-not-found',
+          })
         }
       } else if (!sessionResult.ok && sessionResult.error.code === 'invalid-data') {
+        recordDiagnostic({
+          level: 'error',
+          event: 'session_restore_failed',
+          errorCode: sessionResult.error.code,
+        })
         void provider.progress.clearActiveSession()
         setNotice('An incompatible saved session was reset. Your mastery remains saved.')
       }
@@ -283,7 +362,14 @@ export default function App() {
     return () => {
       active = false
     }
-  }, [engine, provider])
+  }, [engine, provider, recordDiagnostic])
+
+  useEffect(() => {
+    diagnosticsForAttemptTransition(previousEngineState.current, engineState)
+      .forEach(recordDiagnostic)
+
+    previousEngineState.current = engineState
+  }, [engineState, recordDiagnostic])
 
   useEffect(() => {
     if (engineState.status === 'active' || engineState.status === 'paused') {
@@ -296,11 +382,24 @@ export default function App() {
       void provider.progress
         .saveLearningState(nextProgress, engineState.session)
         .then((result) => {
-        if (!result.ok) {
-          setStorageAvailable(false)
-          setNotice(`Learning continues, but the latest progress was not saved: ${result.error.message}`)
-        }
-      })
+          if (result.ok) {
+            recordDiagnostic({
+              level: 'info',
+              event: 'learning_state_saved',
+              ...diagnosticSessionContext(engineState.session),
+            })
+          } else {
+            recordDiagnostic({
+              level: 'error',
+              event: 'persistence_failed',
+              ...diagnosticSessionContext(engineState.session),
+              errorCode: result.error.code,
+              metadata: { operation: 'save_learning_state' },
+            })
+            setStorageAvailable(false)
+            setNotice(`Learning continues, but the latest progress was not saved: ${result.error.message}`)
+          }
+        })
       return
     }
 
@@ -328,23 +427,84 @@ export default function App() {
       progressRef.current = nextProgress
       setProgress(nextProgress)
       setView('summary')
+      recordDiagnostic({
+        level: 'info',
+        event: 'session_completed',
+        ...diagnosticSessionContext(engineState.session),
+        result: engineState.session.isPracticeFallback ? 'practice' : 'review',
+        metadata: {
+          correctAnswers: engineState.result.correctAnswers,
+          incorrectAnswers: engineState.result.incorrectAnswers,
+          completedTargets: engineState.result.completedTargets,
+        },
+      })
       void provider.progress.saveLearningState(nextProgress, null).then((result) => {
-        if (!result.ok) {
+        if (result.ok) {
+          recordDiagnostic({
+            level: 'info',
+            event: 'learning_state_saved',
+            ...diagnosticSessionContext(engineState.session),
+            metadata: { sessionCleared: true },
+          })
+        } else {
+          recordDiagnostic({
+            level: 'error',
+            event: 'persistence_failed',
+            ...diagnosticSessionContext(engineState.session),
+            errorCode: result.error.code,
+            metadata: { operation: 'complete_learning_state' },
+          })
           setStorageAvailable(false)
           setNotice(`Session completed, but local storage could not be updated: ${result.error.message}`)
         }
       })
     }
-  }, [engineState, provider])
+  }, [engineState, provider, recordDiagnostic])
 
   const context = useMemo(
     () => findSessionContext(packs, engineState),
     [engineState, packs],
   )
+
+  useEffect(() => {
+    if (engineState.status !== 'active' || engineState.session.phase !== 'question') {
+      return
+    }
+    const { session } = engineState
+    const presentationKey = `${session.id}::${session.currentSentenceId}::${session.currentTargetId}::${session.questionStartedAt}`
+    if (lastPresentedQuestion.current === presentationKey) return
+    lastPresentedQuestion.current = presentationKey
+    const targetLexemeId = context?.target.lexemeId
+    recordDiagnostic({
+      level: 'info',
+      event: 'target_presented',
+      ...diagnosticSessionContext(session),
+      ...(targetLexemeId ? { lexemeId: targetLexemeId } : {}),
+    })
+  }, [context, engineState, recordDiagnostic])
   const dailyPlan = useMemo(
     () => createDailyLearningPlan(packs, progress),
     [packs, progress],
   )
+  const continuation = useMemo(() => {
+    if (engineState.status !== 'completed') return null
+    const excludedReviewKeys = new Set([
+      ...(engineState.session.continuationExcludedReviewKeys ?? []),
+      ...Object.keys(engineState.session.attemptsByLexemeId).map((lexemeId) =>
+        createReviewKey(engineState.session.packId, lexemeId),
+      ),
+    ])
+    return {
+      excludedReviewKeys: [...excludedReviewKeys],
+      remainingPlan: createDailyLearningPlan(
+        packs,
+        progress,
+        Date.now(),
+        excludedReviewKeys,
+        true,
+      ),
+    }
+  }, [engineState, packs, progress])
   const homeStatistics = useMemo(() => {
     const schedules = Object.values(progress.schedulesByLexemeReviewKey)
     return {
@@ -404,6 +564,12 @@ export default function App() {
     setSettings(next)
     void provider.settings.save(next).then((result) => {
       if (!result.ok) {
+        recordDiagnostic({
+          level: 'error',
+          event: 'persistence_failed',
+          errorCode: result.error.code,
+          metadata: { operation: 'save_settings' },
+        })
         setStorageAvailable(false)
         setNotice(`Settings changed for now but could not be saved: ${result.error.message}`)
       }
@@ -429,17 +595,42 @@ export default function App() {
     updateSettings({ ...settings, learningMode })
   }
 
-  const startLesson = (pack: LessonPack, lesson: Lesson) => {
+  const startLesson = (
+    pack: LessonPack,
+    lesson: Lesson,
+    options: StartLessonOptions = {},
+  ) => {
     stopSpeaking()
+    const excludedLexemeIds = options.excludedReviewKeys?.flatMap((key) => {
+      const prefix = `${pack.id}::`
+      return key.startsWith(prefix) ? [key.slice(prefix.length)] : []
+    })
     const result = engine.start({
       pack,
       lessonId: lesson.id,
       schedulesByLexemeId: schedulesForSession(progressRef.current, pack, lesson),
       learningMode: settings.learningMode,
+      ...(excludedLexemeIds ? { excludedLexemeIds } : {}),
+      ...(options.excludedReviewKeys
+        ? { continuationExcludedReviewKeys: options.excludedReviewKeys }
+        : {}),
+      ...(options.practiceOnly === undefined
+        ? {}
+        : { practiceOnly: options.practiceOnly }),
     })
     if (!result.ok) {
       setNotice(result.error.message)
       return
+    }
+    if (result.value.current.status === 'active') {
+      recordDiagnostic({
+        level: 'info',
+        event: 'session_started',
+        ...diagnosticSessionContext(result.value.current.session),
+        result: result.value.current.session.isPracticeFallback
+          ? 'practice'
+          : 'review',
+      })
     }
     setNotice(undefined)
     setView('learning')
@@ -455,14 +646,37 @@ export default function App() {
 
   const resumeSession = () => {
     stopSpeaking()
-    if (engine.getState().status === 'paused') engine.resume()
+    const state = engine.getState()
+    if (state.status === 'paused') {
+      const result = engine.resume()
+      if (result.ok && result.value.current.status === 'active') {
+        recordDiagnostic({
+          level: 'info',
+          event: 'session_resumed',
+          ...diagnosticSessionContext(result.value.current.session),
+        })
+      }
+    } else if (state.status === 'active') {
+      recordDiagnostic({
+        level: 'info',
+        event: 'session_resumed',
+        ...diagnosticSessionContext(state.session),
+      })
+    }
     if (engine.getState().status === 'active') setView('learning')
   }
 
   const pauseSession = () => {
     stopSpeaking()
     const result = engine.pause()
-    if (result.ok) setView('pause')
+    if (result.ok && result.value.current.status === 'paused') {
+      recordDiagnostic({
+        level: 'info',
+        event: 'session_paused',
+        ...diagnosticSessionContext(result.value.current.session),
+      })
+      setView('pause')
+    }
   }
 
   const submitAnswer = (response: LearningResponse) => {
@@ -470,13 +684,43 @@ export default function App() {
     if (!result.ok) setNotice(result.error.message)
   }
 
+  const restartSentence = () => {
+    const result = engine.restartSentence()
+    if (
+      result.ok &&
+      (result.value.current.status === 'active' ||
+        result.value.current.status === 'paused')
+    ) {
+      recordDiagnostic({
+        level: 'info',
+        event: 'sentence_restarted',
+        ...diagnosticSessionContext(result.value.current.session),
+      })
+    }
+  }
+
   const endSession = () => {
     stopSpeaking()
+    const endingSession = sessionFromState(engine.getState())
+    if (endingSession) {
+      recordDiagnostic({
+        level: 'info',
+        event: 'session_ended',
+        ...diagnosticSessionContext(endingSession),
+      })
+    }
     engine.reset()
     setView('home')
     setNotice('Session ended. Completed reviews remain saved.')
     void provider.progress.clearActiveSession().then((result) => {
       if (!result.ok) {
+        recordDiagnostic({
+          level: 'error',
+          event: 'persistence_failed',
+          ...(endingSession ? diagnosticSessionContext(endingSession) : {}),
+          errorCode: result.error.code,
+          metadata: { operation: 'clear_active_session' },
+        })
         setStorageAvailable(false)
         setNotice(`Session ended, but its saved resume state could not be cleared: ${result.error.message}`)
       }
@@ -485,6 +729,11 @@ export default function App() {
 
   const importLessonPack = async (file: File) => {
     if (file.size > 2_000_000) {
+      recordDiagnostic({
+        level: 'warn',
+        event: 'lesson_pack_rejected',
+        errorCode: 'file-too-large',
+      })
       setNotice('Lesson pack is too large. Maximum size is 2 MB.')
       return
     }
@@ -494,6 +743,13 @@ export default function App() {
       const currentPack = packs.find((pack) => pack.id === importedPack.id) ?? null
       const decision = decideLessonPackUpdate(currentPack, importedPack)
       if (decision.action === 'reject') {
+        recordDiagnostic({
+          level: 'warn',
+          event: 'lesson_pack_rejected',
+          packId: importedPack.id,
+          errorCode: decision.reason,
+          metadata: { incomingVersion: importedPack.version },
+        })
         setNotice(
           decision.reason === 'downgrade'
             ? `Could not import “${importedPack.title}”: version ${importedPack.version} is older than the installed pack.`
@@ -506,22 +762,52 @@ export default function App() {
         return
       }
       const saved = await provider.lessonPacks.save(importedPack)
-      if (!saved.ok) throw new Error(saved.error.message)
+      if (!saved.ok) {
+        recordDiagnostic({
+          level: 'error',
+          event: 'persistence_failed',
+          packId: importedPack.id,
+          errorCode: saved.error.code,
+          metadata: { operation: 'save_lesson_pack' },
+        })
+        setNotice(`Could not save “${importedPack.title}”: ${saved.error.message}`)
+        return
+      }
 
       setPacks((current) => [
         ...current.filter((pack) => pack.id !== importedPack.id),
         importedPack,
       ])
       setNotice(`Imported “${importedPack.title}” successfully.`)
+      recordDiagnostic({
+        level: 'info',
+        event:
+          decision.action === 'replace'
+            ? 'lesson_pack_updated'
+            : 'lesson_pack_imported',
+        packId: importedPack.id,
+        metadata: { version: importedPack.version },
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown import error'
       setNotice(`Could not import JSON pack: ${message}`)
+      recordDiagnostic({
+        level: 'warn',
+        event: 'lesson_pack_rejected',
+        errorCode: 'invalid-or-unsupported',
+      })
     }
   }
 
   const exportBackup = async () => {
     const result = await provider.backup.export()
     if (!result.ok) {
+      recordDiagnostic({
+        level: 'error',
+        event: 'persistence_failed',
+        errorCode: result.error.code,
+        metadata: { operation: 'export_backup' },
+      })
       setNotice(`Could not export backup: ${result.error.message}`)
       return
     }
@@ -536,10 +822,16 @@ export default function App() {
     link.click()
     URL.revokeObjectURL(url)
     setNotice('Backup exported successfully.')
+    recordDiagnostic({ level: 'info', event: 'backup_exported' })
   }
 
   const restoreBackup = async (file: File) => {
     if (file.size > 10 * 1024 * 1024) {
+      recordDiagnostic({
+        level: 'warn',
+        event: 'backup_restore_failed',
+        errorCode: 'file-too-large',
+      })
       setNotice('Backup is too large. Maximum size is 10 MB.')
       return
     }
@@ -547,15 +839,68 @@ export default function App() {
     try {
       const result = await provider.backup.restore(JSON.parse(await file.text()))
       if (!result.ok) {
+        recordDiagnostic({
+          level: 'error',
+          event: 'backup_restore_failed',
+          errorCode: result.error.code,
+        })
         setNotice(`Could not restore backup: ${result.error.message}`)
         return
       }
       setNotice('Backup restored. Reloading your saved data…')
+      recordDiagnostic({ level: 'info', event: 'backup_restore_completed' })
       window.location.reload()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid JSON'
       setNotice(`Could not restore backup: ${message}`)
+      recordDiagnostic({
+        level: 'warn',
+        event: 'backup_restore_failed',
+        errorCode: 'invalid-json',
+      })
     }
+  }
+
+  const exportDiagnostics = async () => {
+    const result = await provider.diagnostics.export()
+    if (!result.ok) {
+      setNotice(`Could not export diagnostics: ${result.error.message}`)
+      return
+    }
+    const blob = new Blob([JSON.stringify(result.value, null, 2)], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `english-recall-diagnostics-${result.value.exportedAt.slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    setNotice('Diagnostics exported successfully.')
+  }
+
+  const clearDiagnostics = async () => {
+    const result = await provider.diagnostics.clear()
+    setNotice(
+      result.ok
+        ? 'Local diagnostics cleared.'
+        : `Could not clear diagnostics: ${result.error.message}`,
+    )
+  }
+
+  const continueAfterSummary = () => {
+    if (engineState.status !== 'completed' || !context || !continuation) return
+    const { remainingPlan, excludedReviewKeys } = continuation
+    if (remainingPlan) {
+      startLesson(remainingPlan.pack, remainingPlan.lesson, {
+        excludedReviewKeys,
+      })
+      return
+    }
+    startLesson(context.pack, context.lesson, {
+      excludedReviewKeys,
+      practiceOnly: true,
+    })
   }
 
   if (booting) {
@@ -633,7 +978,7 @@ export default function App() {
         speechRate={settings.speechRate}
         slowerSpeechRate={getSlowerSpeechRate(settings.speechRate)}
         onPause={pauseSession}
-        onRestartSentence={() => engine.restartSentence()}
+        onRestartSentence={restartSentence}
         onModeChange={setLearningMode}
         onAutoAdvanceChange={(autoAdvance) =>
           updateSettings({ ...settings, autoAdvance })
@@ -679,7 +1024,8 @@ export default function App() {
           engine.reset()
           setView('home')
         }}
-        onRepeat={() => startLesson(context.pack, context.lesson)}
+        nextActionLabel={continuation?.remainingPlan ? 'Continue Learning' : 'Extra Practice'}
+        onNext={continueAfterSummary}
       />
     )
   }
@@ -705,6 +1051,8 @@ export default function App() {
       onImport={(file) => void importLessonPack(file)}
       onExportBackup={() => void exportBackup()}
       onRestoreBackup={(file) => void restoreBackup(file)}
+      onExportDiagnostics={() => void exportDiagnostics()}
+      onClearDiagnostics={() => void clearDiagnostics()}
     />
   )
 }

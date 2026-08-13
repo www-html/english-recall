@@ -72,6 +72,7 @@ function lessonCounts(
   lesson: Lesson,
   progress: LearnerProgress,
   now: number,
+  excludedReviewKeys: ReadonlySet<string>,
 ): Pick<DailyLearningPlan, 'reviewCount' | 'newCount'> {
   const seenLexemes = new Set<string>()
   let reviewCount = 0
@@ -80,6 +81,7 @@ function lessonCounts(
   for (const target of lesson.sentences.flatMap((sentence) => sentence.targets)) {
     if (seenLexemes.has(target.lexemeId)) continue
     seenLexemes.add(target.lexemeId)
+    if (excludedReviewKeys.has(createReviewKey(pack.id, target.lexemeId))) continue
     const schedule =
       progress.schedulesByLexemeReviewKey[
         createReviewKey(pack.id, target.lexemeId)
@@ -111,10 +113,12 @@ export function createDailyLearningPlan(
   packs: readonly LessonPack[],
   progress: LearnerProgress,
   now = Date.now(),
+  excludedReviewKeys: ReadonlySet<string> = new Set(),
+  eligibleOnly = false,
 ): DailyLearningPlan | null {
   const candidates = packs.flatMap((pack) =>
     pack.lessons.map((lesson) => {
-      const counts = lessonCounts(pack, lesson, progress, now)
+      const counts = lessonCounts(pack, lesson, progress, now, excludedReviewKeys)
       return {
         pack,
         lesson,
@@ -128,15 +132,21 @@ export function createDailyLearningPlan(
   )
 
   return (
-    candidates.sort((left, right) => {
-      if (right.reviewCount !== left.reviewCount) {
-        return right.reviewCount - left.reviewCount
-      }
-      const activeDifference =
-        right.reviewCount + right.newCount -
-        (left.reviewCount + left.newCount)
-      if (activeDifference !== 0) return activeDifference
-      return left.lesson.title.localeCompare(right.lesson.title)
-    })[0] ?? null
+    candidates
+      .filter(
+        ({ reviewCount, newCount }) =>
+          !eligibleOnly || reviewCount + newCount > 0,
+      )
+      .sort((left, right) => {
+        if (right.reviewCount !== left.reviewCount) {
+          return right.reviewCount - left.reviewCount
+        }
+        const activeDifference =
+          right.reviewCount +
+          right.newCount -
+          (left.reviewCount + left.newCount)
+        if (activeDifference !== 0) return activeDifference
+        return left.lesson.title.localeCompare(right.lesson.title)
+      })[0] ?? null
   )
 }

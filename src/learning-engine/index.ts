@@ -26,6 +26,7 @@ export type {
   AttemptSignal,
   AnswerEvaluation,
   ExerciseMode,
+  ExerciseSelectionContext,
   LearningEngineState,
   LearningMode,
   LearningSessionSnapshot,

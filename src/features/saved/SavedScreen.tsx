@@ -1,4 +1,4 @@
-import { Bookmark, BookOpen, RefreshCw, Trash2 } from 'lucide-react'
+import { Bookmark, BookOpen, Brain, RefreshCw, Repeat2, Trash2, Volume2 } from 'lucide-react'
 import { useState } from 'react'
 import {
   AppFrame,
@@ -32,7 +32,9 @@ export interface SavedScreenProps extends AppNavigationCallbacks {
   readonly onRemove: (
     sentence: SavedSentenceViewModel,
   ) => void | Promise<void>
-  readonly onPractice: (sentence: SavedSentenceViewModel) => void
+  readonly onListen: (sentence: SavedSentenceViewModel) => void
+  readonly onPracticeRecall: (sentence: SavedSentenceViewModel) => void
+  readonly onShadow: (sentence: SavedSentenceViewModel) => void
 }
 
 export function SavedScreen({
@@ -41,7 +43,9 @@ export function SavedScreen({
   notice,
   onRetry,
   onRemove,
-  onPractice,
+  onListen,
+  onPracticeRecall,
+  onShadow,
   ...navigation
 }: SavedScreenProps) {
   const [removingKey, setRemovingKey] = useState<string | null>(null)
@@ -122,12 +126,28 @@ export function SavedScreen({
                 <p lang="vi">{sentence.translationVi}</p>
                 <div className="saved-sentence-actions">
                   <button
+                    className="button secondary compact"
+                    type="button"
+                    disabled={isRemoving}
+                    onClick={() => onListen(sentence)}
+                  >
+                    <Volume2 size={15} aria-hidden="true" /> Listen
+                  </button>
+                  <button
                     className="button primary compact"
                     type="button"
                     disabled={isRemoving}
-                    onClick={() => onPractice(sentence)}
+                    onClick={() => onPracticeRecall(sentence)}
                   >
-                    Practice
+                    <Brain size={15} aria-hidden="true" /> Practice Recall
+                  </button>
+                  <button
+                    className="button secondary compact"
+                    type="button"
+                    disabled={isRemoving}
+                    onClick={() => onShadow(sentence)}
+                  >
+                    <Repeat2 size={15} aria-hidden="true" /> Shadow
                   </button>
                   <button
                     className="button secondary compact saved-remove-button"

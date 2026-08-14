@@ -1,0 +1,55 @@
+.dictation-translation-hint {
+  align-items: center;
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.35rem 0;
+  border: 0;
+  color: var(--muted-bright);
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
+.dictation-translation-hint:hover {
+  color: var(--text);
+}
+
+.dictation-translation-hint:focus-visible,
+.sentence-shadow-action:focus-visible {
+  outline: 2px solid var(--learning-blue);
+  outline-offset: 3px;
+}
+
+.sentence-shadow-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.45rem;
+  min-height: 2.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.8rem;
+  color: var(--muted-bright);
+  background: var(--surface-raised);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease;
+}
+
+.sentence-shadow-action:hover {
+  border-color: var(--learning-blue);
+  color: var(--text);
+  background: var(--learning-blue-soft);
+}
+
+@media (max-width: 430px) {
+  .sentence-shadow-action {
+    min-height: 2.5rem;
+    padding: 0.5rem 0.65rem;
+  }
+}

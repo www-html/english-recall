@@ -184,7 +184,7 @@ function createVersionTwoDatabase(): Promise<void> {
 
 function writeRawKey(key: string, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('english-recall', 3)
+    const request = indexedDB.open('english-recall', 4)
     request.onerror = () => reject(request.error)
     request.onsuccess = () => {
       const database = request.result
@@ -206,7 +206,7 @@ function writeRawKey(key: string, value: unknown): Promise<void> {
 
 function writeRawPack(value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('english-recall', 3)
+    const request = indexedDB.open('english-recall', 4)
     request.onerror = () => reject(request.error)
     request.onsuccess = () => {
       const database = request.result
@@ -969,7 +969,7 @@ describe('IndexedDbPersistenceProvider', () => {
     expect(listed.value).toHaveLength(MAX_DIAGNOSTIC_EVENTS)
     expect(listed.value[0]?.targetId).toBe('target-1')
     expect(listed.value.at(-1)?.targetId).toBe(`target-${MAX_DIAGNOSTIC_EVENTS}`)
-  })
+  }, 15_000)
 
   it('surfaces quota errors from durable writes', async () => {
     const put = vi

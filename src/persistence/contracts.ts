@@ -252,14 +252,69 @@ export interface LearnerSyncSnapshotV1 {
   readonly sessionHistory: readonly SessionCompletionRecord[]
 }
 
+export interface SyncValue<T> {
+  readonly value: T
+  /** Mutation time for this value, not the time a sync request was made. */
+  readonly updatedAt: IsoDateTime
+}
+
+export interface SyncedLessonPack {
+  readonly pack: LessonPack
+  /** Deterministic identity of the complete, canonical pack payload. */
+  readonly contentHash: string
+}
+
+/**
+ * Provider-neutral sync payload. Diagnostics intentionally remain local and
+ * are never part of this snapshot.
+ */
+export interface LearnerSyncSnapshotV2 {
+  readonly schemaVersion: 2
+  readonly learnerId: LearnerId
+  readonly capturedAt: IsoDateTime
+  readonly lessonPacks: readonly SyncedLessonPack[]
+  readonly progress: SyncValue<LearnerProgress | null>
+  readonly activeSession: SyncValue<LearningSessionSnapshot | null>
+  readonly settings: SyncValue<AppSettings | null>
+  readonly savedSentences: readonly SavedSentenceRecord[]
+  readonly sessionHistory: readonly SessionCompletionRecord[]
+}
+
+export type LearnerSyncSnapshot =
+  | LearnerSyncSnapshotV1
+  | LearnerSyncSnapshotV2
+
+export interface RemoteSyncDocument {
+  readonly revision: string
+  readonly snapshot: LearnerSyncSnapshotV2
+}
+
+export interface SyncConflictError {
+  readonly code: 'conflict'
+  readonly message: string
+  readonly currentRevision?: string
+}
+
+export type SyncError = PersistenceError | SyncConflictError
+
+export interface SyncCompareAndSwapInput {
+  readonly learnerId: LearnerId
+  /** null creates the first remote document; otherwise this must match. */
+  readonly expectedRevision: string | null
+  readonly snapshot: LearnerSyncSnapshotV2
+}
+
 export interface SyncRepository {
   pull(
     learnerId: LearnerId,
-  ): Promise<Result<LearnerSyncSnapshotV1 | null, PersistenceError>>
-  push(snapshot: LearnerSyncSnapshotV1): Promise<Result<void, PersistenceError>>
+  ): Promise<Result<RemoteSyncDocument | null, SyncError>>
+  /** The provider must reject a stale expectedRevision with code `conflict`. */
+  compareAndSwap(
+    input: SyncCompareAndSwapInput,
+  ): Promise<Result<{ readonly revision: string }, SyncError>>
 }
 
-/** Optional future boundary. The local provider does not configure remote sync. */
+/** Optional future boundary. No operational remote provider ships locally. */
 export interface SyncProvider {
   readonly sync: SyncRepository
 }

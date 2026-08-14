@@ -85,9 +85,11 @@ model; migration requires an explicit authored mapping.
    strong not-due targets visible as supporting context. Incorrect attempts are
    retained without touching SRS. `BasicReviewScheduler` updates a lexeme once
    when its target resolves: Good first try, Hard after retry, Again on skip.
-   Auto learning selects Word Choice for weak,
-   Fill Words for developing, and Listening Choice for established mastery. It
-   is independent from the `autoAdvance` setting.
+   Adaptive Learn selects Choose the Word for new/weak lexemes, Type the Word
+   for developing lexemes, and primarily Type the Word or Dictation for strong
+   due lexemes, with deterministic Listen & Choose variation. Retry and restart
+   keep the selected exercise stable. Exercise selection is independent from
+   the `autoAdvance` setting.
 5. The app writes each session snapshot and schedule update to IndexedDB. A
    completed session clears the resumable snapshot and updates aggregate stats.
 6. The service worker caches the app shell and same-origin runtime assets for
@@ -101,9 +103,10 @@ model; migration requires an explicit authored mapping.
   queue and the current learning state is committed in one transaction. Backup
   restore validates everything first and replaces local stores atomically.
 - Learner-owned records are internally scoped by the stable local identity
-  `default`. IndexedDB version 3 atomically moves legacy unscoped progress,
-  active-session, and settings records into that scope without changing the
-  no-account product behavior. Lesson packs remain shared content.
+  `default`. IndexedDB version 4 preserves the version 3 atomic migration of
+  legacy unscoped progress, active-session, and settings records, and safely
+  repairs missing additive Saved/history stores without changing learner data.
+  Lesson packs remain shared content.
 - Saved sentences use the compound identity learner + pack + sentence and are
   independent from SRS. Session-completion history stores only immutable facts
   needed for deterministic reports. `reviewedLexemeIds` contains unique real
@@ -125,10 +128,21 @@ model; migration requires an explicit authored mapping.
 - Continue Learning starts a new bounded engine session. Review keys completed
   in the active continuation chain are excluded from later planners; Extra
   Practice is explicitly non-reviewable and never schedules SRS.
+- Focused Listening, Shadowing, and Saved Recall are practice-only. They may
+  reuse lesson sentences and the audio abstraction, but they do not update SRS,
+  mastery, review counts, or session-completion history.
+- Sync snapshot version 2 carries learner-owned state and lesson packs with a
+  deterministic content hash. Merge helpers use timestamped values, append-only
+  session IDs, compound Saved identities, explicit active-session conflicts,
+  and revision-based compare-and-swap so stale state cannot silently overwrite
+  newer state. Snapshot version 1 remains losslessly upgradable for the fields
+  it originally contained.
 
 ## Deferred decisions
 
 Authentication, a remote sync provider, backend APIs, pack export, and advanced
 adaptive scheduling are intentionally outside the current local-first scope.
-`SyncRepository`/`SyncProvider` define only a future transport boundary for
-learner-owned data; no provider or network dependency is selected.
+`SyncRepository`/`SyncProvider` now define a revisioned transport boundary for
+learner state and content, but no provider, credentials, or network dependency
+is selected; multi-device sync is therefore not operational until a real remote
+implementation supplies pull and compare-and-swap push.

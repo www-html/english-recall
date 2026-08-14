@@ -38,6 +38,12 @@ export const learningModes = [
 export type LearningMode = (typeof learningModes)[number]
 export type ExerciseMode = Exclude<LearningMode, 'auto'>
 
+/** Optional, deterministic context used only by adaptive exercise selection. */
+export interface ExerciseSelectionContext {
+  readonly selectionIndex?: number
+  readonly recentModes?: readonly ExerciseMode[]
+}
+
 export interface AttemptSignal {
   readonly lexemeId: LexemeId
   readonly sentenceId: SentenceId

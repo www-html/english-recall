@@ -141,7 +141,7 @@ For inflected or irregular forms, keep the lemma unchanged and put the exact
 form used by the sentence in each target's `surfaceText`. For example, the
 lexeme `{ "id": "go.verb.01", "lemma": "go" }` can be referenced by a target
 with `surfaceText: "go"` in one sentence and `surfaceText: "went"` in another.
-Word Choice and Fill Words use `surfaceText`, while mastery remains keyed by
+Choose the Word and Type the Word use `surfaceText`, while mastery remains keyed by
 `go.verb.01`. Each distractor also needs a `surfaceText` appropriate for the
 sentence context; its `lexemeId` remains the stable mastery identity it
 references.
@@ -152,7 +152,7 @@ references.
 2. Select **Import JSON**.
 3. Choose the JSON file you created.
 4. After the success message appears, find the new pack in **Lesson library**.
-5. Open a lesson and test Word Choice, Fill Words, and Listening Choice from the
+5. Open a lesson and test Choose the Word, Type the Word, and Listen & Choose from the
    `⋮` menu.
 
 If any schema field, ID, reference, or character span is invalid, English

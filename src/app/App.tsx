@@ -29,6 +29,7 @@ import {
   type LearningFeedback,
 } from '../features/learning/LearningScreen.tsx'
 import { PauseScreen } from '../features/pause/PauseScreen.tsx'
+import { ShadowingPractice } from '../features/practice/index.ts'
 import {
   ProgressScreen,
   type ProgressScreenState,
@@ -82,6 +83,7 @@ type AppView =
   | 'progress'
   | 'settings'
   | 'learning'
+  | 'shadowing'
   | 'pause'
   | 'summary'
 
@@ -111,6 +113,14 @@ interface SessionContext {
 interface StartLessonOptions {
   readonly excludedReviewKeys?: readonly string[]
   readonly practiceOnly?: boolean
+  readonly learningMode?: LearningMode
+}
+
+interface ShadowingContext {
+  readonly lessonTitle: string
+  readonly sentences: readonly Sentence[]
+  readonly currentIndex: number
+  readonly returnView: 'learning' | 'lesson-detail' | 'saved'
 }
 
 function diagnosticSessionContext(
@@ -294,6 +304,20 @@ function resolveSavedSentences(
   })
 }
 
+function findSavedSentenceContext(
+  item: SavedSentenceViewModel,
+  packs: readonly LessonPack[],
+): { readonly pack: LessonPack; readonly lesson: Lesson; readonly sentence: Sentence } | null {
+  const pack = packs.find((candidate) => candidate.id === item.packId)
+  const lesson = pack?.lessons.find((candidate) =>
+    candidate.sentences.some((sentence) => sentence.id === item.sentenceId),
+  )
+  const sentence = lesson?.sentences.find(
+    (candidate) => candidate.id === item.sentenceId,
+  )
+  return pack && lesson && sentence ? { pack, lesson, sentence } : null
+}
+
 function lessonFromTopicSelection({
   lesson,
   selectedTopics,
@@ -331,6 +355,7 @@ export default function App() {
   const [view, setView] = useState<AppView>('home')
   const [selectedPackId, setSelectedPackId] = useState<string>()
   const [selectedLessonId, setSelectedLessonId] = useState<string>()
+  const [shadowingContext, setShadowingContext] = useState<ShadowingContext>()
   const [booting, setBooting] = useState(true)
   const [packs, setPacks] = useState<readonly LessonPack[]>([])
   const [savedSentenceRecords, setSavedSentenceRecords] = useState<
@@ -554,6 +579,35 @@ export default function App() {
       !completedSessions.current.has(engineState.session.id)
     ) {
       completedSessions.current.add(engineState.session.id)
+      if (engineState.session.isPracticeFallback) {
+        sessionBaselines.current.delete(engineState.session.id)
+        setView('summary')
+        recordDiagnostic({
+          level: 'info',
+          event: 'session_completed',
+          ...diagnosticSessionContext(engineState.session),
+          result: 'practice',
+          metadata: {
+            correctAnswers: engineState.result.correctAnswers,
+            incorrectAnswers: engineState.result.incorrectAnswers,
+            completedTargets: engineState.result.completedTargets,
+          },
+        })
+        void provider.progress.clearActiveSession().then((result) => {
+          if (!result.ok) {
+            recordDiagnostic({
+              level: 'error',
+              event: 'persistence_failed',
+              ...diagnosticSessionContext(engineState.session),
+              errorCode: result.error.code,
+              metadata: { operation: 'clear_practice_session' },
+            })
+            setStorageAvailable(false)
+            setNotice(`Practice finished, but its resume state could not be cleared: ${result.error.message}`)
+          }
+        })
+        return
+      }
       const withSchedules = mergeSessionSchedules(
         progressRef.current,
         engineState.session,
@@ -585,7 +639,7 @@ export default function App() {
         level: 'info',
         event: 'session_completed',
         ...diagnosticSessionContext(engineState.session),
-        result: engineState.session.isPracticeFallback ? 'practice' : 'review',
+        result: 'review',
         metadata: {
           correctAnswers: engineState.result.correctAnswers,
           incorrectAnswers: engineState.result.incorrectAnswers,
@@ -763,24 +817,6 @@ export default function App() {
     if (!next.audioEnabled) stopSpeaking()
   }
 
-  const updateHomeLearningMode = (learningMode: LearningMode) => {
-    const state = engine.getState()
-    if (state.status === 'active' || state.status === 'paused') {
-      const result = engine.setLearningMode(learningMode)
-      if (!result.ok) setNotice(result.error.message)
-    }
-    updateSettings({ ...settings, learningMode })
-  }
-
-  const setLearningMode = (learningMode: LearningMode) => {
-    const result = engine.setLearningMode(learningMode)
-    if (!result.ok) {
-      setNotice(result.error.message)
-      return
-    }
-    updateSettings({ ...settings, learningMode })
-  }
-
   const startLesson = (
     pack: LessonPack,
     lesson: Lesson,
@@ -795,7 +831,7 @@ export default function App() {
       pack,
       lessonId: lesson.id,
       schedulesByLexemeId: schedulesForSession(progressRef.current, pack, lesson),
-      learningMode: settings.learningMode,
+      learningMode: options.learningMode ?? 'auto',
       ...(excludedLexemeIds ? { excludedLexemeIds } : {}),
       ...(options.excludedReviewKeys
         ? { continuationExcludedReviewKeys: options.excludedReviewKeys }
@@ -871,17 +907,12 @@ export default function App() {
   }
 
   const practiceSavedSentence = (item: SavedSentenceViewModel) => {
-    const pack = packs.find((candidate) => candidate.id === item.packId)
-    const lesson = pack?.lessons.find((candidate) =>
-      candidate.sentences.some((sentence) => sentence.id === item.sentenceId),
-    )
-    const sentence = lesson?.sentences.find(
-      (candidate) => candidate.id === item.sentenceId,
-    )
-    if (!pack || !lesson || !sentence) {
+    const resolved = findSavedSentenceContext(item, packs)
+    if (!resolved) {
       setNotice('This saved sentence is no longer available in its lesson pack.')
       return
     }
+    const { pack, lesson, sentence } = resolved
     const scopedLesson = { ...lesson, sentences: [sentence] }
     const scopedPack = {
       ...pack,
@@ -889,7 +920,48 @@ export default function App() {
         candidate.id === lesson.id ? scopedLesson : candidate,
       ),
     }
-    startLesson(scopedPack, scopedLesson)
+    startLesson(scopedPack, scopedLesson, {
+      practiceOnly: true,
+      learningMode: 'auto',
+    })
+  }
+
+  const listenToSavedSentence = (item: SavedSentenceViewModel) => {
+    const resolved = findSavedSentenceContext(item, packs)
+    if (!resolved) {
+      setNotice('This saved sentence is no longer available in its lesson pack.')
+      return
+    }
+    speak(resolved.sentence.speechText, settings.speechRate)
+  }
+
+  const beginShadowing = (
+    lessonTitle: string,
+    sentences: readonly Sentence[],
+    returnView: ShadowingContext['returnView'],
+  ) => {
+    if (sentences.length === 0) {
+      setNotice('No sentences are available for Shadowing.')
+      return
+    }
+    stopSpeaking()
+    setShadowingContext({
+      lessonTitle,
+      sentences,
+      currentIndex: 0,
+      returnView,
+    })
+    setNotice(undefined)
+    setView('shadowing')
+  }
+
+  const shadowSavedSentence = (item: SavedSentenceViewModel) => {
+    const resolved = findSavedSentenceContext(item, packs)
+    if (!resolved) {
+      setNotice('This saved sentence is no longer available in its lesson pack.')
+      return
+    }
+    beginShadowing(resolved.lesson.title, [resolved.sentence], 'saved')
   }
 
   const startDailyLearning = () => {
@@ -1281,7 +1353,30 @@ export default function App() {
         candidate.id === lesson.id ? lesson : candidate,
       ),
     }
-    startLesson(pack, lesson)
+    startLesson(pack, lesson, { learningMode: 'auto' })
+  }
+
+  const startSelectedListeningPractice = (selection: LessonStartSelection) => {
+    const lesson = lessonFromTopicSelection(selection)
+    if (lesson.sentences.length === 0) {
+      setNotice('Select at least one topic to start Listening Practice.')
+      return
+    }
+    const pack = {
+      ...selection.pack,
+      lessons: selection.pack.lessons.map((candidate) =>
+        candidate.id === lesson.id ? lesson : candidate,
+      ),
+    }
+    startLesson(pack, lesson, {
+      practiceOnly: true,
+      learningMode: 'listening-choice',
+    })
+  }
+
+  const startSelectedShadowingPractice = (selection: LessonStartSelection) => {
+    const lesson = lessonFromTopicSelection(selection)
+    beginShadowing(lesson.title, lesson.sentences, 'lesson-detail')
   }
 
   const navigationCallbacks = {
@@ -1373,6 +1468,8 @@ export default function App() {
         notice={notice}
         onBack={() => setView('pack-detail')}
         onStartLesson={startSelectedLesson}
+        onStartListeningPractice={startSelectedListeningPractice}
+        onStartShadowingPractice={startSelectedShadowingPractice}
       />
     )
   }
@@ -1381,14 +1478,12 @@ export default function App() {
     return (
       <SettingsScreen
         {...navigationCallbacks}
-        learningMode={settings.learningMode}
         autoAdvance={settings.autoAdvance}
         audioEnabled={settings.audioEnabled}
         speechRate={settings.speechRate}
         slowerSpeechRate={settings.slowerSpeechRate}
         storageAvailable={storageAvailable}
         notice={notice}
-        onLearningModeChange={updateHomeLearningMode}
         onAutoAdvanceChange={(autoAdvance) =>
           updateSettings({ ...settings, autoAdvance })
         }
@@ -1421,7 +1516,9 @@ export default function App() {
         notice={notice}
         onRetry={() => void reloadSavedSentences()}
         onRemove={removeSavedSentence}
-        onPractice={practiceSavedSentence}
+        onListen={listenToSavedSentence}
+        onPracticeRecall={practiceSavedSentence}
+        onShadow={shadowSavedSentence}
       />
     )
   }
@@ -1447,6 +1544,49 @@ export default function App() {
     )
   }
 
+  if (view === 'shadowing' && shadowingContext) {
+    const sentence = shadowingContext.sentences[shadowingContext.currentIndex]
+    if (sentence) {
+      const leaveShadowing = () => {
+        stopSpeaking()
+        setView(shadowingContext.returnView)
+        setShadowingContext(undefined)
+      }
+      return (
+        <ShadowingPractice
+          lessonTitle={shadowingContext.lessonTitle}
+          sentence={{
+            id: sentence.id,
+            displayText: sentence.displayText,
+            translationVi: sentence.translationVi,
+            ...(sentence.explanation ? { explanation: sentence.explanation } : {}),
+          }}
+          currentStep={shadowingContext.currentIndex + 1}
+          totalSteps={shadowingContext.sentences.length}
+          speechSupported={speechSupported}
+          speaking={speaking}
+          slowerSpeechRate={settings.slowerSpeechRate}
+          onListen={() => speak(sentence.speechText, settings.speechRate)}
+          onReplaySlower={() =>
+            speak(sentence.speechText, settings.slowerSpeechRate)
+          }
+          onContinue={() => {
+            stopSpeaking()
+            if (shadowingContext.currentIndex + 1 >= shadowingContext.sentences.length) {
+              leaveShadowing()
+              return
+            }
+            setShadowingContext({
+              ...shadowingContext,
+              currentIndex: shadowingContext.currentIndex + 1,
+            })
+          }}
+          onExit={leaveShadowing}
+        />
+      )
+    }
+  }
+
   if (view === 'learning' && engineState.status === 'active' && context) {
     const { session } = engineState
     const step = targetStep(context.lesson, session)
@@ -1469,7 +1609,13 @@ export default function App() {
         }
         currentStep={step.current}
         totalSteps={step.total}
-        mode={session.learningMode}
+        purpose={
+          session.isPracticeFallback &&
+          (session.learningMode === 'listening-choice' ||
+            session.learningMode === 'full-sentence')
+            ? 'listening-practice'
+            : 'learning'
+        }
         activity={session.exerciseMode}
         feedback={feedbackForSession(session)}
         selectedChoiceLexemeId={
@@ -1500,7 +1646,6 @@ export default function App() {
         slowerSpeechRate={settings.slowerSpeechRate}
         onPause={pauseSession}
         onRestartSentence={restartSentence}
-        onModeChange={setLearningMode}
         onAudioEnabledChange={(audioEnabled) =>
           updateSettings({ ...settings, audioEnabled })
         }
@@ -1524,6 +1669,15 @@ export default function App() {
         onReplaySlower={() =>
           speak(context.sentence.speechText, settings.slowerSpeechRate)
         }
+        {...(session.phase === 'sentence-complete'
+          ? {
+              onShadowSentence: () => beginShadowing(
+                context.lesson.title,
+                [context.sentence],
+                'learning',
+              ),
+            }
+          : {})}
       />
     )
   }
@@ -1569,13 +1723,11 @@ export default function App() {
       newCount={dailyPlan?.newCount ?? 0}
       estimatedMinutes={dailyPlan?.estimatedMinutes ?? 1}
       statistics={homeStatistics}
-      learningMode={settings.learningMode}
       canResume={canResume}
       storageAvailable={storageAvailable}
       notice={notice}
       onStartLearning={startDailyLearning}
       onResume={resumeSession}
-      onLearningModeChange={updateHomeLearningMode}
       onOpenPack={openPack}
     />
   )

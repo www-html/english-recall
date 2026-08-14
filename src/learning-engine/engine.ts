@@ -24,6 +24,7 @@ import type {
   AttemptSignal,
   AttemptSummary,
   ExerciseMode,
+  ExerciseSelectionContext,
   LearningEngineState,
   LearningMode,
   LearningSessionSnapshot,
@@ -117,15 +118,73 @@ export function createTargetOccurrenceKey(
   return `${sentenceId}::${targetId}`
 }
 
+const strongExercisePattern: readonly ExerciseMode[] = [
+  'full-sentence',
+  'fill-words',
+  'full-sentence',
+  'listening-choice',
+  'fill-words',
+]
+
+function variationFallback(mode: ExerciseMode): ExerciseMode {
+  if (mode === 'word-choice') return 'fill-words'
+  if (mode === 'fill-words') return 'full-sentence'
+  if (mode === 'full-sentence') return 'fill-words'
+  return 'full-sentence'
+}
+
 /** Auto selects presentation only; advancing remains an explicit transition. */
 export function selectExerciseMode(
   mode: LearningMode,
   schedule: ReviewSchedule | undefined,
+  context: ExerciseSelectionContext = {},
 ): ExerciseMode {
   if (mode !== 'auto') return mode
   const mastery = getMasteryPercent(schedule)
-  if (mastery >= 75) return 'listening-choice'
-  return mastery >= 40 ? 'fill-words' : 'word-choice'
+  const selectionIndex = Math.max(0, context.selectionIndex ?? 0)
+  const preferred =
+    mastery < 40
+      ? 'word-choice'
+      : mastery < 75
+        ? 'fill-words'
+        : strongExercisePattern[selectionIndex % strongExercisePattern.length]!
+  const recent = context.recentModes?.slice(-2) ?? []
+  return recent.length === 2 && recent.every((recentMode) => recentMode === preferred)
+    ? variationFallback(preferred)
+    : preferred
+}
+
+function selectPlannedExerciseMode(
+  learningMode: LearningMode,
+  lesson: Lesson,
+  sentenceQueue: readonly SentenceId[],
+  activeTargetIdsBySentenceId: Readonly<Record<SentenceId, readonly string[]>>,
+  schedules: Readonly<Record<LexemeId, ReviewSchedule>>,
+  currentSentenceId: SentenceId,
+  currentTargetId: string,
+): ExerciseMode {
+  const selectedModes: ExerciseMode[] = []
+  for (const sentenceId of sentenceQueue) {
+    const sentence = lesson.sentences.find(({ id }) => id === sentenceId)
+    if (!sentence) continue
+    for (const targetId of activeTargetIdsBySentenceId[sentenceId] ?? []) {
+      const target = sentence.targets.find(({ id }) => id === targetId)
+      if (!target) continue
+      const selected = selectExerciseMode(
+        learningMode,
+        schedules[target.lexemeId],
+        {
+          selectionIndex: selectedModes.length,
+          recentModes: selectedModes.slice(-2),
+        },
+      )
+      if (sentenceId === currentSentenceId && targetId === currentTargetId) {
+        return selected
+      }
+      selectedModes.push(selected)
+    }
+  }
+  return selectExerciseMode(learningMode, undefined)
 }
 
 interface SessionPlan {
@@ -498,7 +557,15 @@ export class DefaultLearningEngine implements LearningEngine {
           solvedTargetIds: [],
           phase: 'question',
           learningMode,
-          exerciseMode: selectExerciseMode(learningMode, schedules[target.lexemeId]),
+          exerciseMode: selectPlannedExerciseMode(
+            learningMode,
+            lesson,
+            sentenceQueue,
+            plan.activeTargetIdsBySentenceId,
+            initialSchedules,
+            sentence.id,
+            target.id,
+          ),
           wrongChoiceIdsByOccurrenceKey: {},
           attemptsByLexemeId: {},
           attemptHistory: [],
@@ -692,9 +759,15 @@ export class DefaultLearningEngine implements LearningEngine {
     const session = {
       ...this.state.session,
       learningMode: mode,
-      exerciseMode: selectExerciseMode(
+      exerciseMode: selectPlannedExerciseMode(
         mode,
-        this.state.session.schedulesByLexemeId[context.target.lexemeId],
+        this.lesson!,
+        this.state.session.sentenceQueue,
+        this.state.session.activeTargetIdsBySentenceId,
+        this.state.session.initialSchedulesByLexemeId ??
+          this.state.session.schedulesByLexemeId,
+        context.sentence.id,
+        context.target.id,
       ),
       updatedAt: this.clock.now(),
     }
@@ -758,9 +831,14 @@ export class DefaultLearningEngine implements LearningEngine {
       currentTargetIndex: targetIndex,
       currentTargetId: target.id,
       phase: 'question',
-      exerciseMode: selectExerciseMode(
+      exerciseMode: selectPlannedExerciseMode(
         session.learningMode,
-        session.schedulesByLexemeId[target.lexemeId],
+        this.lesson!,
+        session.sentenceQueue,
+        session.activeTargetIdsBySentenceId,
+        session.initialSchedulesByLexemeId ?? session.schedulesByLexemeId,
+        sentence.id,
+        target.id,
       ),
       questionStartedAt: now,
       updatedAt: now,

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { LessonPack } from '../domain/lesson-pack.schema.ts'
 import type { Clock, ReviewScheduler } from './contracts.ts'
-import { DefaultLearningEngine, createTargetOccurrenceKey } from './engine.ts'
+import {
+  DefaultLearningEngine,
+  createTargetOccurrenceKey,
+  selectExerciseMode,
+} from './engine.ts'
 import type { RecallRating, ReviewSchedule } from './state.ts'
 
 const now = '2026-08-13T12:00:00.000Z'
@@ -94,6 +98,14 @@ const weakSchedule: ReviewSchedule = {
   lapses: 2,
 }
 
+const developingSchedule: ReviewSchedule = {
+  dueAt: now,
+  intervalDays: 3,
+  easeFactor: 2.1,
+  repetitions: 3,
+  lapses: 0,
+}
+
 class FixedClock implements Clock {
   now(): string { return now }
 }
@@ -112,6 +124,80 @@ function active(engine: DefaultLearningEngine) {
   if (state.status !== 'active') throw new Error('Expected active state')
   return state.session
 }
+
+describe('adaptive exercise selection', () => {
+  it('progresses from recognition to typed recall as mastery develops', () => {
+    expect(selectExerciseMode('auto', undefined)).toBe('word-choice')
+    expect(selectExerciseMode('auto', weakSchedule)).toBe('word-choice')
+    expect(selectExerciseMode('auto', developingSchedule)).toBe('fill-words')
+  })
+
+  it('gives strong scheduled targets Dictation with occasional listening variation', () => {
+    const modes = Array.from({ length: 10 }, (_, selectionIndex) =>
+      selectExerciseMode('auto', strongSchedule, { selectionIndex }),
+    )
+
+    expect(modes[0]).toBe('full-sentence')
+    expect(modes).toContain('fill-words')
+    expect(modes).toContain('listening-choice')
+    expect(modes.filter((mode) => mode === 'listening-choice')).toHaveLength(2)
+  })
+
+  it('is deterministic and prevents runs longer than two identical interactions', () => {
+    const selectRun = () => {
+      const modes: ReturnType<typeof selectExerciseMode>[] = []
+      for (let selectionIndex = 0; selectionIndex < 9; selectionIndex += 1) {
+        modes.push(
+          selectExerciseMode('auto', undefined, {
+            selectionIndex,
+            recentModes: modes.slice(-2),
+          }),
+        )
+      }
+      return modes
+    }
+    const first = selectRun()
+
+    expect(selectRun()).toEqual(first)
+    expect(first.slice(0, 6)).toEqual([
+      'word-choice',
+      'word-choice',
+      'fill-words',
+      'word-choice',
+      'word-choice',
+      'fill-words',
+    ])
+    expect(
+      first.some(
+        (mode, index) => mode === first[index + 1] && mode === first[index + 2],
+      ),
+    ).toBe(false)
+  })
+
+  it('preserves every manual exercise override', () => {
+    expect(selectExerciseMode('word-choice', strongSchedule)).toBe('word-choice')
+    expect(selectExerciseMode('fill-words', undefined)).toBe('fill-words')
+    expect(selectExerciseMode('listening-choice', undefined)).toBe(
+      'listening-choice',
+    )
+    expect(selectExerciseMode('full-sentence', undefined)).toBe('full-sentence')
+  })
+
+  it('uses Dictation for a strong due target in an auto learning session', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      schedulesByLexemeId: {
+        usually: { ...strongSchedule, dueAt: now },
+        drink: strongSchedule,
+      },
+    })
+
+    expect(active(engine).exerciseMode).toBe('full-sentence')
+  })
+})
 
 describe('active and supporting targets', () => {
   it('exercises due/new targets only and never alters a supporting target', () => {

@@ -53,13 +53,11 @@ function createProps(overrides: Partial<HomeScreenProps> = {}): HomeScreenProps 
     newCount: 4,
     estimatedMinutes: 7,
     statistics: { wordsReviewed: 24, masteredWords: 9, accuracyPercent: 83 },
-    learningMode: 'auto',
     canResume: false,
     storageAvailable: true,
     notice: undefined,
     onStartLearning: vi.fn(),
     onResume: vi.fn(),
-    onLearningModeChange: vi.fn(),
     onOpenPack: vi.fn(),
     onOpenHome: vi.fn(),
     onOpenLessons: vi.fn(),
@@ -89,18 +87,11 @@ describe('HomeScreen learning-first flow', () => {
     expect(onOpenProgress).toHaveBeenCalledOnce()
   })
 
-  it('uses a compact accessible Learning Mode popover', () => {
-    const onLearningModeChange = vi.fn()
-    render(<HomeScreen {...createProps({ onLearningModeChange })} />)
+  it('keeps exercise selection out of the normal Home workflow', () => {
+    render(<HomeScreen {...createProps()} />)
 
-    const trigger = screen.getByRole('button', { name: 'Auto' })
-    expect(trigger.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(trigger)
-    const options = screen.getAllByRole('option')
-    expect(options).toHaveLength(5)
-    fireEvent.click(screen.getByRole('option', { name: /Listening Choice/ }))
-    expect(onLearningModeChange).toHaveBeenCalledWith('listening-choice')
-    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Learning mode')).toBeNull()
+    expect(screen.queryByRole('listbox')).toBeNull()
   })
 
   it('continues an unfinished session with Space outside interactive controls', () => {

@@ -76,7 +76,6 @@ function createProps(
     solvedTargetIds: [],
     currentStep: 1,
     totalSteps: 2,
-    mode: 'word-choice',
     activity: 'word-choice',
     feedback: 'idle',
     selectedChoiceLexemeId: null,
@@ -91,7 +90,6 @@ function createProps(
     sentenceSaved: false,
     onPause: vi.fn(),
     onRestartSentence: vi.fn(),
-    onModeChange: vi.fn(),
     onAudioEnabledChange: vi.fn(),
     onAutoAdvanceChange: vi.fn(),
     onSpeechRateChange: vi.fn(),
@@ -229,7 +227,6 @@ describe('LearningScreen sentence recall', () => {
       <LearningScreen
         {...createProps({
           activity: 'fill-words',
-          mode: 'fill-words',
           onSubmitFill,
         })}
       />,
@@ -288,7 +285,6 @@ describe('LearningScreen sentence recall', () => {
       <LearningScreen
         {...createProps({
           activity: 'full-sentence',
-          mode: 'full-sentence',
           speechSupported: true,
           onSubmitFill,
         })}
@@ -297,6 +293,9 @@ describe('LearningScreen sentence recall', () => {
 
     expect(container.querySelector('.sentence-line')).toBeNull()
     expect(screen.queryByText(sentence.displayText)).toBeNull()
+    expect(screen.queryByText(sentence.translationVi)).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Show translation hint' }))
+    expect(screen.getByText(sentence.translationVi)).toBeTruthy()
     const input = screen.getByRole('textbox', { name: 'Type the full sentence' })
     expect(input.getAttribute('enterkeyhint')).toBe('done')
     const actions = container.querySelector('.sentence-actions')
@@ -318,18 +317,16 @@ describe('LearningScreen sentence recall', () => {
     expect(screen.getByRole('button', { name: /Replay sentence slower/ })).toBeTruthy()
   })
 
-  it('shows all target meanings and exposes real session settings', async () => {
+  it('shows all target meanings and exposes session settings without a manual mode override', async () => {
     const onAutoAdvanceChange = vi.fn()
     const onSpeechRateChange = vi.fn()
     const onSlowerSpeechRateChange = vi.fn()
-    const onModeChange = vi.fn()
     const { rerender } = render(
       <LearningScreen
         {...createProps({
           onAutoAdvanceChange,
           onSpeechRateChange,
           onSlowerSpeechRateChange,
-          onModeChange,
         })}
       />,
     )
@@ -342,11 +339,10 @@ describe('LearningScreen sentence recall', () => {
     const slowerRateSlider = within(dialog).getByRole('slider', { name: /Slower replay rate/ })
     fireEvent.change(speechRateSlider, { target: { value: '1.1' } })
     fireEvent.change(slowerRateSlider, { target: { value: '0.65' } })
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'Fill Words' }))
     expect(onAutoAdvanceChange).toHaveBeenCalledWith(true)
     expect(onSpeechRateChange).toHaveBeenCalledWith(1.1)
     expect(onSlowerSpeechRateChange).toHaveBeenCalledWith(0.65)
-    expect(onModeChange).toHaveBeenCalledWith('fill-words')
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Learning mode' })).toBeNull()
 
     slowerRateSlider.focus()
     fireEvent.keyDown(dialog, { key: 'Tab' })
@@ -369,7 +365,6 @@ describe('LearningScreen sentence recall', () => {
     const { container } = render(
       <LearningScreen
         {...createProps({
-          mode: 'listening-choice',
           activity: 'listening-choice',
           speechSupported: true,
           onSubmitChoice,

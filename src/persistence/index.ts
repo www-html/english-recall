@@ -9,7 +9,9 @@ export type {
   DiagnosticRepository,
   LearnerId,
   LearnerProgress,
+  LearnerSyncSnapshot,
   LearnerSyncSnapshotV1,
+  LearnerSyncSnapshotV2,
   LessonPackCatalog,
   LessonPackRepository,
   LessonPackSummary,
@@ -27,7 +29,12 @@ export type {
   SettingsRepository,
   SkippedLessonPack,
   SyncProvider,
+  SyncCompareAndSwapInput,
+  SyncConflictError,
+  SyncError,
+  SyncValue,
   SyncRepository,
+  SyncedLessonPack,
 } from './contracts.ts'
 export {
   createInitialProgress,
@@ -49,3 +56,11 @@ export {
   createSessionCompletionRecord,
   type SessionCompletionFactsInput,
 } from './session-history.ts'
+export {
+  createLessonPackContentHash,
+  createSyncedLessonPack,
+  mergeLearnerSyncSnapshots,
+  upgradeLearnerSyncSnapshotV1,
+  type LearnerSyncMergeConflict,
+  type LearnerSyncMergeResult,
+} from './sync.ts'

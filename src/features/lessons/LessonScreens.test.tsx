@@ -53,6 +53,8 @@ describe('lesson drill-down', () => {
 
   it('derives topics, validates selection, and sends an explicit start contract', () => {
     const onStartLesson = vi.fn()
+    const onStartListeningPractice = vi.fn()
+    const onStartShadowingPractice = vi.fn()
     render(
       <LessonDetailScreen
         {...navigation}
@@ -63,6 +65,8 @@ describe('lesson drill-down', () => {
         notice={undefined}
         onBack={vi.fn()}
         onStartLesson={onStartLesson}
+        onStartListeningPractice={onStartListeningPractice}
+        onStartShadowingPractice={onStartShadowingPractice}
       />,
     )
 
@@ -76,6 +80,15 @@ describe('lesson drill-down', () => {
       selectedTopics: ['Planning', 'Testing'],
       mixTopics: false,
     })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Listening' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Shadowing' }))
+    expect(onStartListeningPractice).toHaveBeenCalledWith(
+      expect.objectContaining({ lesson: PACK.lessons[0] }),
+    )
+    expect(onStartShadowingPractice).toHaveBeenCalledWith(
+      expect.objectContaining({ lesson: PACK.lessons[0] }),
+    )
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Planning' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Testing' }))

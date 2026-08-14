@@ -14,20 +14,14 @@ import {
   AppFrame,
   type AppNavigationCallbacks,
 } from '../navigation/AppFrame.tsx'
-import {
-  LearningModeMenu,
-  type HomeLearningMode,
-} from '../home/LearningModeMenu.tsx'
 
 interface SettingsScreenProps extends AppNavigationCallbacks {
-  readonly learningMode: HomeLearningMode
   readonly autoAdvance: boolean
   readonly audioEnabled: boolean
   readonly speechRate: number
   readonly slowerSpeechRate: number
   readonly storageAvailable: boolean
   readonly notice: string | undefined
-  readonly onLearningModeChange: (mode: HomeLearningMode) => void
   readonly onAutoAdvanceChange: (enabled: boolean) => void
   readonly onAudioEnabledChange: (enabled: boolean) => void
   readonly onSpeechRateChange: (rate: number) => void
@@ -42,14 +36,12 @@ interface SettingsScreenProps extends AppNavigationCallbacks {
 }
 
 export function SettingsScreen({
-  learningMode,
   autoAdvance,
   audioEnabled,
   speechRate,
   slowerSpeechRate,
   storageAvailable,
   notice,
-  onLearningModeChange,
   onAutoAdvanceChange,
   onAudioEnabledChange,
   onSpeechRateChange,
@@ -87,7 +79,6 @@ export function SettingsScreen({
             <div><h2 id="learning-settings-title">Learning</h2><p>Choose how sessions behave.</p></div>
           </div>
           <div className="settings-fields">
-            <LearningModeMenu value={learningMode} onChange={onLearningModeChange} />
             <ToggleSetting
               label="Auto Advance"
               description="Move on automatically after sentence feedback."

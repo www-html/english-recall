@@ -10,12 +10,12 @@ is the single release source of truth and is injected into production builds.
 ## Features
 
 - Learning-first Home, Lessons, Saved, Progress, Settings, Learning, Pause, and Summary screens
-- Word Choice with number shortcuts `1`–`4`
-- Fill Words with `Space` to submit and `Esc` to clear
-- Listening Choice with automatic sentence audio and `1`–`4` shortcuts
-- Auto learning mode that selects Word Choice, Fill Words, or Listening Choice
-  from lexeme mastery
-- Optional sentence auto-advance, configured separately from learning mode
+- Adaptive Learn chooses **Choose the Word**, **Type the Word**, **Listen & Choose**,
+  or **Dictation** from mastery, due state, and deterministic session variation
+- Number shortcuts `1`–`4`, `Space` submit/continue, `Enter` submit, and `Esc` clear
+- Focused Listening Practice and microphone-free Shadowing that never modify SRS
+- Dictation keeps the translation hidden until evaluation unless the learner asks for a hint
+- Optional sentence auto-advance, configured independently from exercise selection
 - English speech controls with adjustable playback rate
 - Versioned JSON lesson packs validated with Zod
 - Friendly Excel lesson-pack import with deterministic IDs and target spans
@@ -92,8 +92,10 @@ local learner shape.
 No account is required in v0.1.0: one browser profile and its IndexedDB data
 represent one local learner. Refreshing or reopening the installed PWA restores
 the exact active target. Backup/Restore is the manual portability path between
-browsers and devices; the app uses no identity cookies, fingerprinting, cloud
-sync, or telemetry.
+browsers and devices; the app uses no identity cookies, fingerprinting, or
+telemetry. A provider-neutral sync v2 contract safely covers learner state and
+lesson-pack content, but no remote provider is configured, so cloud sync is not
+operational in this repository.
 
 Local Diagnostics records a bounded set of structured lifecycle IDs and status
 codes for troubleshooting. It never records typed answers by default, stays on

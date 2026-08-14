@@ -38,7 +38,9 @@ import type {
 import { DEFAULT_LEARNER_ID } from './contracts.ts'
 
 const databaseName = 'english-recall'
-const databaseVersion = 3
+// Version 4 re-runs the additive store checks to repair development-era v3
+// databases that may have been opened before Saved/history stores existed.
+const databaseVersion = 4
 const packStore = 'lesson-packs'
 const keyValueStore = 'key-value'
 const diagnosticStore = 'diagnostics'

@@ -1,4 +1,4 @@
-import { ArrowLeft, Play, Shuffle } from 'lucide-react'
+import { ArrowLeft, Headphones, Play, Repeat2, Shuffle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { Lesson, LessonPack } from '../../domain/lesson-pack.schema.ts'
 import {
@@ -21,6 +21,8 @@ interface LessonDetailScreenProps extends AppNavigationCallbacks {
   readonly notice: string | undefined
   readonly onBack: () => void
   readonly onStartLesson: (selection: LessonStartSelection) => void
+  readonly onStartListeningPractice: (selection: LessonStartSelection) => void
+  readonly onStartShadowingPractice: (selection: LessonStartSelection) => void
 }
 
 export function LessonDetailScreen({
@@ -31,6 +33,8 @@ export function LessonDetailScreen({
   notice,
   onBack,
   onStartLesson,
+  onStartListeningPractice,
+  onStartShadowingPractice,
   ...navigation
 }: LessonDetailScreenProps) {
   const topics = useMemo(
@@ -51,6 +55,13 @@ export function LessonDetailScreen({
         ? current.filter((candidate) => candidate !== topic)
         : topics.filter((candidate) => current.includes(candidate) || candidate === topic),
     )
+  }
+
+  const selection: LessonStartSelection = {
+    pack,
+    lesson,
+    selectedTopics,
+    mixTopics,
   }
 
   return (
@@ -121,15 +132,38 @@ export function LessonDetailScreen({
         className="button primary lesson-start-button"
         type="button"
         disabled={selectedTopics.length === 0}
-        onClick={() => onStartLesson({
-          pack,
-          lesson,
-          selectedTopics,
-          mixTopics,
-        })}
+        onClick={() => onStartLesson(selection)}
       >
         <Play size={18} aria-hidden="true" /> Start Lesson
       </button>
+
+      <section className="topic-section" aria-labelledby="lesson-practice-title">
+        <div className="compact-section-heading">
+          <div>
+            <p className="eyebrow">Practice only</p>
+            <h2 id="lesson-practice-title">Practice</h2>
+          </div>
+        </div>
+        <p>Strengthen listening and speaking without changing your learning schedule.</p>
+        <div className="settings-inline-actions">
+          <button
+            className="button secondary compact"
+            type="button"
+            disabled={selectedTopics.length === 0}
+            onClick={() => onStartListeningPractice(selection)}
+          >
+            <Headphones size={16} aria-hidden="true" /> Listening
+          </button>
+          <button
+            className="button secondary compact"
+            type="button"
+            disabled={selectedTopics.length === 0}
+            onClick={() => onStartShadowingPractice(selection)}
+          >
+            <Repeat2 size={16} aria-hidden="true" /> Shadowing
+          </button>
+        </div>
+      </section>
     </AppFrame>
   )
 }

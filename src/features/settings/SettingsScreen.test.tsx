@@ -6,14 +6,12 @@ import { SettingsScreen } from './SettingsScreen.tsx'
 
 function renderSettings(overrides: Record<string, unknown> = {}) {
   const props = {
-    learningMode: 'auto' as const,
     autoAdvance: false,
     audioEnabled: true,
     speechRate: 0.9,
     slowerSpeechRate: 0.55,
     storageAvailable: true,
     notice: undefined,
-    onLearningModeChange: vi.fn(),
     onAutoAdvanceChange: vi.fn(),
     onAudioEnabledChange: vi.fn(),
     onSpeechRateChange: vi.fn(),

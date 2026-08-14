@@ -5,6 +5,7 @@ import {
   Check,
   Gauge,
   Headphones,
+  Languages,
   Lightbulb,
   LogOut,
   MoreHorizontal,
@@ -29,6 +30,7 @@ import type {
   Sentence,
   TargetOccurrence,
 } from '../../domain/lesson-pack.schema.ts'
+import './learning.css'
 
 export type LearningMode =
   | 'auto'
@@ -57,8 +59,9 @@ export interface LearningScreenProps {
   /** One-based position in the full learning session. */
   readonly currentStep: number
   readonly totalSteps: number
-  readonly mode: LearningMode
   readonly activity: LearningActivity
+  /** Changes presentation only. Scheduling remains owned by the engine. */
+  readonly purpose?: 'learning' | 'listening-practice'
   readonly feedback: LearningFeedback
   readonly selectedChoiceLexemeId: string | null
   readonly wrongChoiceLexemeIds: readonly string[]
@@ -72,7 +75,6 @@ export interface LearningScreenProps {
   readonly sentenceSaved: boolean
   readonly onPause: () => void
   readonly onRestartSentence: () => void
-  readonly onModeChange: (mode: LearningMode) => void
   readonly onAudioEnabledChange: (enabled: boolean) => void
   readonly onAutoAdvanceChange: (enabled: boolean) => void
   readonly onSpeechRateChange: (rate: number) => void
@@ -84,6 +86,8 @@ export interface LearningScreenProps {
   readonly onListen: () => void
   readonly onReplaySlower: () => void
   readonly onSentenceSavedChange: (saved: boolean) => void | Promise<void>
+  /** Optional practice hand-off. It never resolves a target or updates SRS. */
+  readonly onShadowSentence?: () => void
 }
 
 function handleModalKeyDown(
@@ -114,17 +118,6 @@ function handleModalKeyDown(
     first.focus()
   }
 }
-
-const MODE_LABELS: ReadonlyArray<{
-  value: LearningMode
-  label: string
-}> = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'word-choice', label: 'Word Choice' },
-  { value: 'fill-words', label: 'Fill Words' },
-  { value: 'listening-choice', label: 'Listening Choice' },
-  { value: 'full-sentence', label: 'Full Sentence' },
-]
 
 interface LearningMenuProps {
   readonly onPause: () => void
@@ -379,8 +372,8 @@ export function LearningScreen({
   solvedTargetIds,
   currentStep,
   totalSteps,
-  mode,
   activity,
+  purpose = 'learning',
   feedback,
   selectedChoiceLexemeId,
   wrongChoiceLexemeIds,
@@ -394,7 +387,6 @@ export function LearningScreen({
   sentenceSaved,
   onPause,
   onRestartSentence,
-  onModeChange,
   onAudioEnabledChange,
   onAutoAdvanceChange,
   onSpeechRateChange,
@@ -406,11 +398,13 @@ export function LearningScreen({
   onListen,
   onReplaySlower,
   onSentenceSavedChange,
+  onShadowSentence,
 }: LearningScreenProps) {
   const [fillAnswer, setFillAnswer] = useState('')
   const [fillHintVisible, setFillHintVisible] = useState(false)
   const [fullSentenceAnswer, setFullSentenceAnswer] = useState('')
   const [fullSentenceHintVisible, setFullSentenceHintVisible] = useState(false)
+  const [dictationTranslationVisible, setDictationTranslationVisible] = useState(false)
   const [editedAfterAttempt, setEditedAfterAttempt] = useState(false)
   const [shakingChoiceId, setShakingChoiceId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -469,6 +463,7 @@ export function LearningScreen({
     setFillHintVisible(false)
     setFullSentenceAnswer('')
     setFullSentenceHintVisible(false)
+    setDictationTranslationVisible(false)
     setEditedAfterAttempt(false)
     setShakingChoiceId(null)
     setSaveSentenceError(false)
@@ -655,23 +650,6 @@ export function LearningScreen({
                 Done
               </button>
             </div>
-            <fieldset className="session-mode-setting">
-              <legend>Learning mode</legend>
-              <div role="radiogroup" aria-label="Learning mode">
-                {MODE_LABELS.map((option) => (
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={mode === option.value}
-                    key={option.value}
-                    onClick={() => onModeChange(option.value)}
-                  >
-                    <span>{option.label}</span>
-                    {mode === option.value ? <Check size={15} aria-hidden="true" /> : null}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
             <label className={`session-setting-toggle ${!speechSupported ? 'is-disabled' : ''}`}>
               <span>
                 <strong>Automatic audio</strong>
@@ -771,7 +749,17 @@ export function LearningScreen({
       <section className="learning-stage" aria-labelledby="question-label">
         <div className="question-row">
           <span className="question-kicker" id="question-label">
-            {activity === 'listening-choice' ? 'Listening' : 'Question'}
+            {purpose === 'listening-practice'
+              ? activity === 'full-sentence'
+                ? 'Listening Practice · Dictation'
+                : 'Listening Practice · Listen & Choose'
+              : activity === 'word-choice'
+                ? 'Choose the Word'
+                : activity === 'fill-words'
+                  ? 'Type the Word'
+                  : activity === 'listening-choice'
+                    ? 'Listen & Choose'
+                    : 'Dictation'}
           </span>
         </div>
 
@@ -843,7 +831,18 @@ export function LearningScreen({
           <form className="full-sentence-form" onSubmit={submitFullSentence}>
             <div className="full-sentence-prompt">
               <strong>Type the full sentence you hear.</strong>
-              <span lang="vi">{sentence.translationVi}</span>
+              {dictationTranslationVisible || feedback !== 'idle' ? (
+                <span lang="vi">{sentence.translationVi}</span>
+              ) : (
+                <button
+                  className="dictation-translation-hint"
+                  type="button"
+                  onClick={() => setDictationTranslationVisible(true)}
+                >
+                  <Languages size={15} aria-hidden="true" />
+                  Show translation hint
+                </button>
+              )}
             </div>
             <input
               className={`full-sentence-input ${visibleFeedback === 'incorrect' ? 'is-wrong' : ''}`}
@@ -1011,6 +1010,16 @@ export function LearningScreen({
               ) : null}
             </dl>
             <div className="sentence-complete-actions">
+              {onShadowSentence ? (
+                <button
+                  className="sentence-shadow-action"
+                  type="button"
+                  onClick={onShadowSentence}
+                >
+                  <Headphones size={16} aria-hidden="true" />
+                  Shadow this sentence
+                </button>
+              ) : null}
               <button
                 className="sentence-continue"
                 type="button"

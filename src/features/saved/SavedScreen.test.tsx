@@ -31,7 +31,9 @@ function renderScreen(
     notice: undefined,
     onRetry: vi.fn(),
     onRemove: vi.fn(),
-    onPractice: vi.fn(),
+    onListen: vi.fn(),
+    onPracticeRecall: vi.fn(),
+    onShadow: vi.fn(),
     onOpenHome: vi.fn(),
     onOpenLessons: vi.fn(),
     onOpenSaved: vi.fn(),
@@ -68,13 +70,15 @@ describe('SavedScreen', () => {
     expect(onRetry).toHaveBeenCalledOnce()
   })
 
-  it('shows sentence context and delegates practice and remove actions', async () => {
+  it('shows sentence context and delegates SRS-independent actions', async () => {
     const user = userEvent.setup()
-    const onPractice = vi.fn()
+    const onListen = vi.fn()
+    const onPracticeRecall = vi.fn()
+    const onShadow = vi.fn()
     const onRemove = vi.fn().mockResolvedValue(undefined)
     renderScreen(
       { status: 'ready', items: [savedSentence] },
-      { onPractice, onRemove },
+      { onListen, onPracticeRecall, onShadow, onRemove },
     )
 
     expect(screen.getByText('Starter English')).toBeTruthy()
@@ -83,8 +87,12 @@ describe('SavedScreen', () => {
     expect(screen.getByText('I usually drink coffee.')).toBeTruthy()
     expect(screen.getByText('Tôi thường uống cà phê.')).toBeTruthy()
 
-    await user.click(screen.getByRole('button', { name: 'Practice' }))
-    expect(onPractice).toHaveBeenCalledWith(savedSentence)
+    await user.click(screen.getByRole('button', { name: 'Listen' }))
+    expect(onListen).toHaveBeenCalledWith(savedSentence)
+    await user.click(screen.getByRole('button', { name: 'Practice Recall' }))
+    expect(onPracticeRecall).toHaveBeenCalledWith(savedSentence)
+    await user.click(screen.getByRole('button', { name: 'Shadow' }))
+    expect(onShadow).toHaveBeenCalledWith(savedSentence)
 
     await user.click(screen.getByRole('button', { name: /Remove/ }))
     expect(onRemove).toHaveBeenCalledWith(savedSentence)
@@ -101,7 +109,9 @@ function renderProps(
     notice: undefined,
     onRetry: vi.fn(),
     onRemove: vi.fn(),
-    onPractice: vi.fn(),
+    onListen: vi.fn(),
+    onPracticeRecall: vi.fn(),
+    onShadow: vi.fn(),
     onOpenHome: vi.fn(),
     onOpenLessons: vi.fn(),
     onOpenSaved: vi.fn(),

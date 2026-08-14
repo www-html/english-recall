@@ -10,12 +10,6 @@ import {
   AppFrame,
   type AppNavigationCallbacks,
 } from '../navigation/AppFrame.tsx'
-import {
-  LearningModeMenu,
-  type HomeLearningMode,
-} from './LearningModeMenu.tsx'
-
-export type { HomeLearningMode } from './LearningModeMenu.tsx'
 
 export interface HomeStatistics {
   readonly wordsReviewed: number
@@ -29,13 +23,11 @@ export interface HomeScreenProps extends AppNavigationCallbacks {
   readonly newCount: number
   readonly estimatedMinutes: number
   readonly statistics: HomeStatistics
-  readonly learningMode: HomeLearningMode
   readonly canResume: boolean
   readonly storageAvailable: boolean
   readonly notice: string | undefined
   readonly onStartLearning: () => void
   readonly onResume: () => void
-  readonly onLearningModeChange: (mode: HomeLearningMode) => void
   readonly onOpenPack: (pack: LessonPack) => void
 }
 
@@ -45,13 +37,11 @@ export function HomeScreen({
   newCount,
   estimatedMinutes,
   statistics,
-  learningMode,
   canResume,
   storageAvailable,
   notice,
   onStartLearning,
   onResume,
-  onLearningModeChange,
   onOpenPack,
   ...navigation
 }: HomeScreenProps) {
@@ -98,10 +88,6 @@ export function HomeScreen({
             <p className="eyebrow">Daily recall</p>
             <h1 id="today-title">Today</h1>
           </div>
-          <LearningModeMenu
-            value={learningMode}
-            onChange={onLearningModeChange}
-          />
         </div>
 
         <div className="today-card">

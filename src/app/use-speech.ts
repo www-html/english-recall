@@ -4,6 +4,13 @@ export function getSlowerSpeechRate(rate: number): number {
   return Math.max(0.5, Number((rate * 0.6).toFixed(2)))
 }
 
+export function shouldAllowLearningSpeech(
+  view: string,
+  engineStatus: string,
+): boolean {
+  return view === 'learning' && engineStatus === 'active'
+}
+
 export function useSpeech() {
   const [speaking, setSpeaking] = useState(false)
   const supported =
@@ -31,7 +38,20 @@ export function useSpeech() {
     [supported],
   )
 
-  useEffect(() => stop, [stop])
+  useEffect(() => {
+    const stopWhenHidden = () => {
+      if (document.visibilityState !== 'visible') stop()
+    }
+    const stopWhenPageLeaves = () => stop()
+
+    document.addEventListener('visibilitychange', stopWhenHidden)
+    window.addEventListener('pagehide', stopWhenPageLeaves)
+    return () => {
+      document.removeEventListener('visibilitychange', stopWhenHidden)
+      window.removeEventListener('pagehide', stopWhenPageLeaves)
+      stop()
+    }
+  }, [stop])
 
   return { supported, speaking, speak, stop }
 }

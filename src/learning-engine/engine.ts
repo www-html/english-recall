@@ -274,6 +274,17 @@ function findTargetIndex(sentence: Sentence, targetId: string): number {
   return sentence.targets.findIndex(({ id }) => id === targetId)
 }
 
+function copySchedules(
+  schedules: Readonly<Record<LexemeId, ReviewSchedule>>,
+): Readonly<Record<LexemeId, ReviewSchedule>> {
+  return Object.fromEntries(
+    Object.entries(schedules).map(([lexemeId, schedule]) => [
+      lexemeId,
+      { ...schedule },
+    ]),
+  )
+}
+
 function snapshotMatchesPack(
   pack: LessonPack,
   lesson: Lesson,
@@ -347,8 +358,17 @@ function snapshotMatchesPack(
   }
 
   const lexemeIds = new Set(pack.lexemes.map(({ id }) => id))
-  return Object.entries(snapshot.schedulesByLexemeId).every(
-    ([id, schedule]) => lexemeIds.has(id) && isSchedule(schedule),
+  const schedulesMatchPack = (
+    schedules: Readonly<Record<LexemeId, ReviewSchedule>>,
+  ) =>
+    Object.entries(schedules).every(
+      ([id, schedule]) => lexemeIds.has(id) && isSchedule(schedule),
+    )
+
+  return (
+    schedulesMatchPack(snapshot.schedulesByLexemeId) &&
+    (snapshot.initialSchedulesByLexemeId === undefined ||
+      schedulesMatchPack(snapshot.initialSchedulesByLexemeId))
   )
 }
 
@@ -431,7 +451,8 @@ export class DefaultLearningEngine implements LearningEngine {
     const lesson = request.pack.lessons.find(({ id }) => id === request.lessonId)
     if (!lesson) return failure('lesson-not-found', 'Lesson was not found')
     const now = request.now ?? this.clock.now()
-    const schedules = request.schedulesByLexemeId ?? {}
+    const initialSchedules = copySchedules(request.schedulesByLexemeId ?? {})
+    const schedules = copySchedules(initialSchedules)
     const plan = createSessionPlan(
       lesson,
       schedules,
@@ -481,6 +502,7 @@ export class DefaultLearningEngine implements LearningEngine {
           wrongChoiceIdsByOccurrenceKey: {},
           attemptsByLexemeId: {},
           attemptHistory: [],
+          initialSchedulesByLexemeId: initialSchedules,
           schedulesByLexemeId: schedules,
           startedAt: now,
           questionStartedAt: now,
@@ -507,7 +529,10 @@ export class DefaultLearningEngine implements LearningEngine {
     const context = this.currentContext(this.state.session)
     if (!context) return failure('target-not-found', 'Current target was not found')
 
-    if (this.state.session.exerciseMode !== 'fill-words') {
+    const isChoiceExercise =
+      this.state.session.exerciseMode === 'word-choice' ||
+      this.state.session.exerciseMode === 'listening-choice'
+    if (isChoiceExercise) {
       if (response.kind !== 'choice') {
         return failure('invalid-response', 'Choice exercises require a choice response')
       }
@@ -529,13 +554,16 @@ export class DefaultLearningEngine implements LearningEngine {
     }
 
     if (response.kind !== 'text') {
-      return failure('invalid-response', 'Fill Words requires a text response')
+      return failure('invalid-response', 'Typing exercises require a text response')
     }
+    const expectedAnswer = this.state.session.exerciseMode === 'full-sentence'
+      ? context.sentence.displayText
+      : context.target.surfaceText
     return success(
       this.recordAttempt(
         this.state.session,
         context,
-        normalizeAnswer(response.value) === normalizeAnswer(context.target.surfaceText)
+        normalizeAnswer(response.value) === normalizeAnswer(expectedAnswer)
           ? 'correct'
           : 'incorrect',
         response.value.trim(),
@@ -796,7 +824,10 @@ export class DefaultLearningEngine implements LearningEngine {
         ? {
             ...evaluationBase,
             outcome,
-            expectedAnswer: context.target.surfaceText,
+            expectedAnswer:
+              session.exerciseMode === 'full-sentence'
+                ? context.sentence.displayText
+                : context.target.surfaceText,
           }
         : { ...evaluationBase, outcome }
     const signalBase = {
@@ -817,7 +848,9 @@ export class DefaultLearningEngine implements LearningEngine {
       ? { ...signalBase, nextReviewAt: schedule.dueAt }
       : signalBase
     const wrongChoices =
-      session.exerciseMode !== 'fill-words' && outcome === 'incorrect'
+      (session.exerciseMode === 'word-choice' ||
+        session.exerciseMode === 'listening-choice') &&
+      outcome === 'incorrect'
         ? Array.from(
             new Set([
               ...(session.wrongChoiceIdsByOccurrenceKey[occurrenceKey] ?? []),

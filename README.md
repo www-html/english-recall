@@ -9,7 +9,7 @@ is the single release source of truth and is injected into production builds.
 
 ## Features
 
-- Home, Learning, Pause, and Summary screens
+- Learning-first Home, Lessons, Saved, Progress, Settings, Learning, Pause, and Summary screens
 - Word Choice with number shortcuts `1`–`4`
 - Fill Words with `Space` to submit and `Esc` to clear
 - Listening Choice with automatic sentence audio and `1`–`4` shortcuts
@@ -18,6 +18,9 @@ is the single release source of truth and is injected into production builds.
 - Optional sentence auto-advance, configured separately from learning mode
 - English speech controls with adjustable playback rate
 - Versioned JSON lesson packs validated with Zod
+- Friendly Excel lesson-pack import with deterministic IDs and target spans
+- Topic-filtered lesson sessions and mixed-topic practice
+- Learner-scoped saved sentences and real weekly/monthly session history
 - Basic spaced repetition, mastery, and due-review tracking
 - Offline-capable PWA shell and local-only IndexedDB persistence
 - Built-in starter pack with reusable lexemes and inflected sentence contexts
@@ -79,10 +82,12 @@ session are saved together in one transaction, and mutations are serialized so
 rapid answers cannot let an older snapshot replace a newer one. Storage
 failures are shown in the app; learning remains usable without a white screen.
 
-Home provides a versioned JSON backup containing imported packs, settings,
-progress, schedules, and an optional resumable session. Restore validates the
-complete backup before one atomic IndexedDB transaction; malformed or
-unsupported backups leave current data unchanged.
+Settings provides a versioned JSON backup containing imported packs, settings,
+progress, schedules, saved sentences, session history, and an optional
+resumable session. Restore validates the complete backup before one atomic
+IndexedDB transaction; malformed or unsupported backups leave current data
+unchanged. Backup schema v1 remains restorable and is upgraded to the current
+local learner shape.
 
 No account is required in v0.1.0: one browser profile and its IndexedDB data
 represent one local learner. Refreshing or reopening the installed PWA restores
@@ -94,7 +99,7 @@ Local Diagnostics records a bounded set of structured lifecycle IDs and status
 codes for troubleshooting. It never records typed answers by default, stays on
 the device, retains only the newest 3,000 events, and is deliberately excluded
 from learner backups. Home can export diagnostics as JSON or clear them after a
-confirmation.
+confirmation from Settings.
 
 Lesson-pack `schemaVersion`, pack `id`, and semantic content `version` are
 independent. Re-importing the same `id` requires the same content or a higher
@@ -115,4 +120,6 @@ SRS.
 See [docs/architecture.md](docs/architecture.md) for module boundaries and data
 flow. See
 [docs/lesson-pack-authoring-guide.md](docs/lesson-pack-authoring-guide.md) for
-the authoritative guide to creating and importing lesson-pack JSON files.
+the authoritative guide to creating and importing lesson-pack JSON files, and
+[docs/excel-lesson-pack-import.md](docs/excel-lesson-pack-import.md) for the
+supported Excel authoring workflow.

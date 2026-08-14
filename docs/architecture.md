@@ -24,7 +24,7 @@ src/
   app/                 Composition root, app lifecycle, audio, and styling
   data/                Bundled JSON lesson packs
   domain/              Lesson pack schema and domain types
-  features/            Home, Learning, Pause, and Summary UI slices
+  features/            Home, Lessons, Saved, Progress, Settings, and session UI slices
   learning-engine/     State model and framework-independent contracts
   persistence/         Async contracts and IndexedDB adapter
   shared/              Small cross-cutting TypeScript primitives
@@ -72,8 +72,11 @@ model; migration requires an explicit authored mapping.
 
 ## Runtime flow
 
-1. The app parses bundled or imported JSON with Zod.
-2. The composition root loads packs, progress, settings, and any active session
+1. The app parses bundled or imported JSON with Zod. Excel authoring rows are
+   normalized into schema version 3, assigned deterministic ids and spans, then
+   passed through the same production parser before persistence.
+2. The composition root loads packs, progress, settings, saved sentences,
+   session history, and any active session
    through `PersistenceProvider`.
 3. `DefaultLearningEngine` owns question, target feedback, sentence completion,
    pause, resume, restart, and final completion transitions. Wrong answers stay
@@ -97,15 +100,27 @@ model; migration requires an explicit authored mapping.
 - IndexedDB progress and active-session mutations share an ordered operation
   queue and the current learning state is committed in one transaction. Backup
   restore validates everything first and replaces local stores atomically.
-- Backup schema version 1 contains lesson packs, progress/SRS, settings, and an
-  optional active session. Unsupported or malformed backups never partially
-  mutate storage.
+- Learner-owned records are internally scoped by the stable local identity
+  `default`. IndexedDB version 3 atomically moves legacy unscoped progress,
+  active-session, and settings records into that scope without changing the
+  no-account product behavior. Lesson packs remain shared content.
+- Saved sentences use the compound identity learner + pack + sentence and are
+  independent from SRS. Session-completion history stores only immutable facts
+  needed for deterministic reports. `reviewedLexemeIds` contains unique real
+  SRS commits (never practice, supporting, or wrong-only attempts);
+  `newlyLearnedLexemeIds` had no pre-session schedule; `masteredLexemeIds`
+  crossed from mastery below 70 to at least 70 in that session.
+- Backup schema version 2 contains lesson packs and the complete `default`
+  learner state, including saved sentences and session history. Strict version
+  1 backups remain accepted and restore losslessly with empty collections for
+  fields that did not exist in version 1. Restore validates everything first
+  and replaces all participating stores in one atomic transaction.
 - The Vite base path controls manifest, service-worker, icon, navigation, and
   asset URLs so root and subpath deployments use the same architecture.
 - An application-level error boundary offers a safe reload without exposing
   stack traces in the production interface.
 - Diagnostics use their own capped IndexedDB store and are not part of the
-  learner backup transaction. Logging is best-effort, local-only, and contains
+  learner backup or future sync snapshot. Logging is best-effort, local-only, and contains
   context identifiers rather than typed answers.
 - Continue Learning starts a new bounded engine session. Review keys completed
   in the active continuation chain are excluded from later planners; Extra
@@ -113,5 +128,7 @@ model; migration requires an explicit authored mapping.
 
 ## Deferred decisions
 
-Authentication, remote sync, backend APIs, pack export, and advanced adaptive
-scheduling are intentionally outside the current local-first scope.
+Authentication, a remote sync provider, backend APIs, pack export, and advanced
+adaptive scheduling are intentionally outside the current local-first scope.
+`SyncRepository`/`SyncProvider` define only a future transport boundary for
+learner-owned data; no provider or network dependency is selected.

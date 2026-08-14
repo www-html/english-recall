@@ -1,13 +1,17 @@
 import {
+  ArrowRight,
+  Bookmark,
+  BookmarkCheck,
   Check,
+  Gauge,
   Headphones,
+  Lightbulb,
   LogOut,
   MoreHorizontal,
   Pause,
   RotateCcw,
   Settings2,
   Volume2,
-  VolumeX,
 } from 'lucide-react'
 import {
   Fragment,
@@ -18,6 +22,7 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from 'react'
 import type {
   Lexeme,
@@ -30,6 +35,7 @@ export type LearningMode =
   | 'word-choice'
   | 'fill-words'
   | 'listening-choice'
+  | 'full-sentence'
 export type LearningActivity = Exclude<LearningMode, 'auto'>
 export type LearningFeedback = 'idle' | 'incorrect' | 'correct'
 
@@ -63,18 +69,50 @@ export interface LearningScreenProps {
   readonly autoAdvance: boolean
   readonly speechRate: number
   readonly slowerSpeechRate: number
+  readonly sentenceSaved: boolean
   readonly onPause: () => void
   readonly onRestartSentence: () => void
   readonly onModeChange: (mode: LearningMode) => void
   readonly onAudioEnabledChange: (enabled: boolean) => void
   readonly onAutoAdvanceChange: (enabled: boolean) => void
   readonly onSpeechRateChange: (rate: number) => void
+  readonly onSlowerSpeechRateChange: (rate: number) => void
   readonly onEndSession: () => void
   readonly onSubmitChoice: (lexemeId: string) => void
   readonly onSubmitFill: (word: string) => void
   readonly onContinue: () => void
   readonly onListen: () => void
   readonly onReplaySlower: () => void
+  readonly onSentenceSavedChange: (saved: boolean) => void | Promise<void>
+}
+
+function handleModalKeyDown(
+  event: ReactKeyboardEvent<HTMLElement>,
+  onClose: () => void,
+) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    onClose()
+    return
+  }
+  if (event.key !== 'Tab') return
+
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.getAttribute('aria-hidden') !== 'true')
+  const first = focusable[0]
+  const last = focusable.at(-1)
+  if (!first || !last) return
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 const MODE_LABELS: ReadonlyArray<{
@@ -85,24 +123,19 @@ const MODE_LABELS: ReadonlyArray<{
   { value: 'word-choice', label: 'Word Choice' },
   { value: 'fill-words', label: 'Fill Words' },
   { value: 'listening-choice', label: 'Listening Choice' },
+  { value: 'full-sentence', label: 'Full Sentence' },
 ]
 
 interface LearningMenuProps {
-  readonly mode: LearningMode
-  readonly sessionSettingsLabel: string | undefined
   readonly onPause: () => void
   readonly onRestartSentence: () => void
-  readonly onModeChange: (mode: LearningMode) => void
   readonly onOpenSessionSettings: () => void
   readonly onEndSession: () => void
 }
 
 function LearningMenu({
-  mode,
-  sessionSettingsLabel,
   onPause,
   onRestartSentence,
-  onModeChange,
   onOpenSessionSettings,
   onEndSession,
 }: LearningMenuProps) {
@@ -189,28 +222,13 @@ function LearningMenu({
           </button>
 
           <div className="learning-menu-divider" role="separator" />
-          <p className="learning-menu-label">Learning mode</p>
-          {MODE_LABELS.map((option) => (
-            <button
-              className="learning-mode-option"
-              type="button"
-              role="menuitemradio"
-              aria-checked={mode === option.value}
-              key={option.value}
-              onClick={() => runAndClose(() => onModeChange(option.value))}
-            >
-              <span className="mode-radio" aria-hidden="true" />
-              <span>{option.label}</span>
-              {mode === option.value ? <Check size={16} aria-hidden="true" /> : null}
-            </button>
-          ))}
           <button
             type="button"
             role="menuitem"
             onClick={() => runAndClose(onOpenSessionSettings)}
           >
             <Settings2 size={17} aria-hidden="true" />
-            <span>{sessionSettingsLabel ?? 'Session settings'}</span>
+            <span>Session settings</span>
           </button>
 
           <div className="learning-menu-divider" role="separator" />
@@ -237,10 +255,12 @@ interface SentenceLineProps {
   readonly activity: LearningActivity
   readonly feedback: LearningFeedback
   readonly answer: string
-  readonly suffix: string
+  readonly fillValue: string
+  readonly fillHintVisible: boolean
+  readonly fillInputRef: RefObject<HTMLInputElement | null>
   readonly inputWidth: number
   readonly sentenceComplete: boolean
-  readonly onSuffixChange: (value: string) => void
+  readonly onFillValueChange: (value: string) => void
   readonly onFillKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void
 }
 
@@ -252,10 +272,12 @@ function SentenceLine({
   activity,
   feedback,
   answer,
-  suffix,
+  fillValue,
+  fillHintVisible,
+  fillInputRef,
   inputWidth,
   sentenceComplete,
-  onSuffixChange,
+  onFillValueChange,
   onFillKeyDown,
 }: SentenceLineProps) {
   const orderedTargets = useMemo(
@@ -288,22 +310,39 @@ function SentenceLine({
         </span>,
       )
     } else if (activity === 'fill-words') {
+      const firstLetter = answer.charAt(0)
+      const editableValue =
+        fillHintVisible && fillValue.startsWith(firstLetter)
+          ? fillValue.slice(firstLetter.length)
+          : fillValue
       parts.push(
         <span
           className={`inline-answer ${feedback === 'incorrect' ? 'is-wrong' : ''} ${feedback === 'correct' ? 'is-correct' : ''}`}
           key={target.id}
         >
-          <span aria-hidden="true">{answer.charAt(0)}</span>
+          {fillHintVisible ? <span aria-hidden="true">{firstLetter}</span> : null}
           <input
+            ref={fillInputRef}
             autoFocus
             autoCapitalize="none"
             autoComplete="off"
+            enterKeyHint="done"
             spellCheck="false"
-            aria-label={`Complete the word beginning with ${answer.charAt(0)}`}
-            value={suffix}
-            size={inputWidth}
+            aria-label={
+              fillHintVisible
+                ? `Complete the word beginning with ${firstLetter}`
+                : 'Complete the missing word'
+            }
+            value={editableValue}
+            size={Math.max(2, inputWidth - (fillHintVisible ? 1 : 0))}
             disabled={feedback === 'correct'}
-            onChange={(event) => onSuffixChange(event.target.value)}
+            onChange={(event) =>
+              onFillValueChange(
+                fillHintVisible
+                  ? `${firstLetter}${event.target.value}`
+                  : event.target.value,
+              )
+            }
             onKeyDown={onFillKeyDown}
           />
         </span>,
@@ -352,25 +391,35 @@ export function LearningScreen({
   autoAdvance,
   speechRate,
   slowerSpeechRate,
+  sentenceSaved,
   onPause,
   onRestartSentence,
   onModeChange,
   onAudioEnabledChange,
   onAutoAdvanceChange,
   onSpeechRateChange,
+  onSlowerSpeechRateChange,
   onEndSession,
   onSubmitChoice,
   onSubmitFill,
   onContinue,
   onListen,
   onReplaySlower,
+  onSentenceSavedChange,
 }: LearningScreenProps) {
-  const [suffix, setSuffix] = useState('')
+  const [fillAnswer, setFillAnswer] = useState('')
+  const [fillHintVisible, setFillHintVisible] = useState(false)
+  const [fullSentenceAnswer, setFullSentenceAnswer] = useState('')
+  const [fullSentenceHintVisible, setFullSentenceHintVisible] = useState(false)
   const [editedAfterAttempt, setEditedAfterAttempt] = useState(false)
   const [shakingChoiceId, setShakingChoiceId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false)
+  const [savingSentence, setSavingSentence] = useState(false)
+  const [saveSentenceError, setSaveSentenceError] = useState(false)
   const shakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fillInputRef = useRef<HTMLInputElement>(null)
+  const modalWasOpen = useRef(false)
   const answer = choices.find(
     (choice) => choice.lexemeId === targetLexeme.id,
   )?.surfaceText ?? currentTarget.surfaceText
@@ -386,26 +435,70 @@ export function LearningScreen({
     () => new Set(wrongChoiceLexemeIds),
     [wrongChoiceLexemeIds],
   )
-  const isChoiceActivity = activity !== 'fill-words'
+  const isChoiceActivity =
+    activity === 'word-choice' || activity === 'listening-choice'
+  const isFullSentenceActivity = activity === 'full-sentence'
   const isAudioFirst = activity === 'listening-choice' && speechSupported
+  const sentenceFirstLetters = useMemo(
+    () =>
+      sentence.displayText
+        .split(/\s+/)
+        .flatMap((word) => word.match(/\p{L}/u)?.[0] ?? [])
+        .join(' · '),
+    [sentence.displayText],
+  )
+  const canSubmitFill = fillHintVisible
+    ? fillAnswer.trim().length > firstLetter.length
+    : fillAnswer.trim().length > 0
+
+  const toggleSavedSentence = async () => {
+    if (savingSentence) return
+    setSavingSentence(true)
+    setSaveSentenceError(false)
+    try {
+      await onSentenceSavedChange(!sentenceSaved)
+    } catch {
+      setSaveSentenceError(true)
+    } finally {
+      setSavingSentence(false)
+    }
+  }
 
   useEffect(() => {
-    setSuffix('')
+    setFillAnswer('')
+    setFillHintVisible(false)
+    setFullSentenceAnswer('')
+    setFullSentenceHintVisible(false)
     setEditedAfterAttempt(false)
     setShakingChoiceId(null)
+    setSaveSentenceError(false)
   }, [sentence.id, currentTarget.id, activity])
 
   useEffect(() => {
-    if (feedback === 'correct') setSuffix(answer.slice(firstLetter.length))
-  }, [answer, feedback, firstLetter.length])
+    if (feedback !== 'correct') return
+    setFillAnswer(answer)
+    if (isFullSentenceActivity) setFullSentenceAnswer(sentence.displayText)
+  }, [answer, feedback, firstLetter.length, isFullSentenceActivity, sentence.displayText])
 
   useEffect(() => () => {
     if (shakeTimer.current) clearTimeout(shakeTimer.current)
   }, [])
 
   useEffect(() => {
+    if (settingsOpen || endConfirmationOpen) {
+      modalWasOpen.current = true
+      return
+    }
+    if (modalWasOpen.current) {
+      modalWasOpen.current = false
+      document.querySelector<HTMLButtonElement>('.learning-icon-button')?.focus()
+    }
+  }, [endConfirmationOpen, settingsOpen])
+
+  useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) return
+      if (settingsOpen || endConfirmationOpen) return
       if (
         event.target instanceof Element &&
         event.target.closest('.learning-menu')
@@ -421,6 +514,17 @@ export function LearningScreen({
       if (event.key === 'ArrowDown') {
         event.preventDefault()
         if (speechSupported) onReplaySlower()
+        return
+      }
+
+      if (sentenceComplete && event.key === ' ') {
+        const interactiveTarget =
+          event.target instanceof Element &&
+          event.target.closest('button, input, textarea, select, a, [contenteditable="true"]')
+        if (!interactiveTarget) {
+          event.preventDefault()
+          onContinue()
+        }
         return
       }
 
@@ -448,16 +552,46 @@ export function LearningScreen({
     onListen,
     onReplaySlower,
     onSubmitChoice,
+    onContinue,
     speechSupported,
+    sentenceComplete,
+    settingsOpen,
     targetLexeme.id,
+    endConfirmationOpen,
   ])
 
   const submitFill = (event?: FormEvent) => {
     event?.preventDefault()
-    const fullWord = `${firstLetter}${suffix}`.trim()
-    if (feedback !== 'correct' && suffix.trim() && fullWord) {
+    const fullWord = fillAnswer.trim()
+    if (feedback !== 'correct' && canSubmitFill && fullWord) {
       setEditedAfterAttempt(false)
       onSubmitFill(fullWord)
+    }
+  }
+
+  const showTypingHint = () => {
+    if (activity === 'fill-words') {
+      setFillHintVisible(true)
+      setFillAnswer((current) => {
+        if (!current) return firstLetter
+        return current.toLocaleLowerCase('en-US').startsWith(
+          firstLetter.toLocaleLowerCase('en-US'),
+        )
+          ? current
+          : `${firstLetter}${current}`
+      })
+      window.requestAnimationFrame(() => fillInputRef.current?.focus())
+    } else if (activity === 'full-sentence') {
+      setFullSentenceHintVisible(true)
+    }
+  }
+
+  const submitFullSentence = (event?: FormEvent) => {
+    event?.preventDefault()
+    const response = fullSentenceAnswer.trim()
+    if (feedback !== 'correct' && response) {
+      setEditedAfterAttempt(false)
+      onSubmitFill(response)
     }
   }
 
@@ -488,11 +622,8 @@ export function LearningScreen({
           </div>
         </div>
         <LearningMenu
-          mode={mode}
-          sessionSettingsLabel="Session settings"
           onPause={onPause}
           onRestartSentence={onRestartSentence}
-          onModeChange={onModeChange}
           onOpenSessionSettings={() => setSettingsOpen(true)}
           onEndSession={() => setEndConfirmationOpen(true)}
         />
@@ -511,9 +642,9 @@ export function LearningScreen({
             role="dialog"
             aria-modal="true"
             aria-labelledby="session-settings-title"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setSettingsOpen(false)
-            }}
+            onKeyDown={(event) =>
+              handleModalKeyDown(event, () => setSettingsOpen(false))
+            }
           >
             <div className="session-settings-heading">
               <div>
@@ -524,6 +655,39 @@ export function LearningScreen({
                 Done
               </button>
             </div>
+            <fieldset className="session-mode-setting">
+              <legend>Learning mode</legend>
+              <div role="radiogroup" aria-label="Learning mode">
+                {MODE_LABELS.map((option) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === option.value}
+                    key={option.value}
+                    onClick={() => onModeChange(option.value)}
+                  >
+                    <span>{option.label}</span>
+                    {mode === option.value ? <Check size={15} aria-hidden="true" /> : null}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <label className={`session-setting-toggle ${!speechSupported ? 'is-disabled' : ''}`}>
+              <span>
+                <strong>Automatic audio</strong>
+                <small>
+                  {speechSupported
+                    ? `Play each new sentence automatically · ${audioEnabled ? 'On' : 'Off'}`
+                    : 'Not available in this browser'}
+                </small>
+              </span>
+              <input
+                type="checkbox"
+                checked={audioEnabled}
+                disabled={!speechSupported}
+                onChange={(event) => onAudioEnabledChange(event.target.checked)}
+              />
+            </label>
             <label className="session-setting-toggle">
               <span>
                 <strong>Auto-advance</strong>
@@ -542,11 +706,27 @@ export function LearningScreen({
               </span>
               <input
                 type="range"
+                aria-label="Speech rate"
                 min="0.6"
                 max="1.2"
                 step="0.1"
                 value={speechRate}
                 onChange={(event) => onSpeechRateChange(Number(event.target.value))}
+              />
+            </label>
+            <label className="speech-rate-setting">
+              <span>
+                <strong>Slower replay rate</strong>
+                <output>{slowerSpeechRate.toFixed(2)}×</output>
+              </span>
+              <input
+                type="range"
+                aria-label="Slower replay rate"
+                min="0.5"
+                max={Math.max(0.5, Number((speechRate - 0.05).toFixed(2)))}
+                step="0.05"
+                value={slowerSpeechRate}
+                onChange={(event) => onSlowerSpeechRateChange(Number(event.target.value))}
               />
             </label>
           </section>
@@ -567,9 +747,9 @@ export function LearningScreen({
             aria-modal="true"
             aria-labelledby="end-session-title"
             aria-describedby="end-session-description"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setEndConfirmationOpen(false)
-            }}
+            onKeyDown={(event) =>
+              handleModalKeyDown(event, () => setEndConfirmationOpen(false))
+            }
           >
             <span className="end-session-icon" aria-hidden="true"><LogOut size={21} /></span>
             <h2 id="end-session-title">End this session?</h2>
@@ -593,42 +773,128 @@ export function LearningScreen({
           <span className="question-kicker" id="question-label">
             {activity === 'listening-choice' ? 'Listening' : 'Question'}
           </span>
+        </div>
+
+        <div className="sentence-actions" aria-label="Sentence actions">
           <div className="question-audio" aria-label="Sentence audio controls">
             <button
               className={speaking ? 'is-active' : ''}
               type="button"
               disabled={!speechSupported}
-              aria-label="Listen to sentence. Keyboard shortcut Arrow Up"
-              title="Listen · Arrow Up"
+              aria-label="Replay sentence. Keyboard shortcut Arrow Up"
+              title="Replay · Arrow Up"
               onClick={onListen}
             >
-              <Volume2 size={17} aria-hidden="true" />
+              <Volume2 size={16} aria-hidden="true" />
             </button>
             <button
               type="button"
               disabled={!speechSupported}
-              aria-label="Replay sentence slower. Keyboard shortcut Arrow Down"
-              title="Replay slower · Arrow Down"
+              aria-label={`Replay sentence slower at ${slowerSpeechRate.toFixed(2)}×. Keyboard shortcut Arrow Down`}
+              title={`Slower ${slowerSpeechRate.toFixed(2)}× · Arrow Down`}
               onClick={onReplaySlower}
             >
-              <RotateCcw size={16} aria-hidden="true" />
-              <span>{slowerSpeechRate.toFixed(1)}×</span>
+              <Gauge size={17} aria-hidden="true" />
             </button>
           </div>
+          <button
+            className={`sentence-save-button ${sentenceSaved ? 'is-saved' : ''}`}
+            type="button"
+            aria-pressed={sentenceSaved}
+            aria-busy={savingSentence}
+            aria-label={
+              savingSentence
+                ? 'Saving sentence'
+                : sentenceSaved
+                  ? 'Remove sentence from Saved'
+                  : 'Save sentence'
+            }
+            title={sentenceSaved ? 'Remove from Saved' : 'Save sentence'}
+            disabled={savingSentence}
+            onClick={() => void toggleSavedSentence()}
+          >
+            {sentenceSaved
+              ? <BookmarkCheck size={17} aria-hidden="true" />
+              : <Bookmark size={17} aria-hidden="true" />}
+          </button>
+          {!sentenceComplete &&
+          (activity === 'fill-words' || activity === 'full-sentence') ? (
+            <button
+              className={`sentence-save-button sentence-hint-button ${
+                fillHintVisible || fullSentenceHintVisible ? 'is-active' : ''
+              }`}
+              type="button"
+              aria-pressed={fillHintVisible || fullSentenceHintVisible}
+              aria-label={
+                activity === 'fill-words'
+                  ? 'Show first-letter hint'
+                  : 'Show first letters for the sentence'
+              }
+              title="First-letter hint"
+              disabled={fillHintVisible || fullSentenceHintVisible}
+              onClick={showTypingHint}
+            >
+              <Lightbulb size={17} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
 
-        {isAudioFirst && !sentenceComplete ? (
+        {isFullSentenceActivity && !sentenceComplete ? (
+          <form className="full-sentence-form" onSubmit={submitFullSentence}>
+            <div className="full-sentence-prompt">
+              <strong>Type the full sentence you hear.</strong>
+              <span lang="vi">{sentence.translationVi}</span>
+            </div>
+            <input
+              className={`full-sentence-input ${visibleFeedback === 'incorrect' ? 'is-wrong' : ''}`}
+              autoFocus
+              autoComplete="off"
+              enterKeyHint="done"
+              spellCheck="false"
+              aria-label="Type the full sentence"
+              value={fullSentenceAnswer}
+              disabled={feedback === 'correct'}
+              onChange={(event) => {
+                setFullSentenceAnswer(event.target.value)
+                setEditedAfterAttempt(true)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setFullSentenceAnswer('')
+                  setEditedAfterAttempt(true)
+                } else if (event.key === 'Enter') {
+                  event.preventDefault()
+                  submitFullSentence()
+                }
+              }}
+            />
+            {fullSentenceHintVisible ? (
+              <p className="full-sentence-letter-hint" aria-live="polite">
+                {sentenceFirstLetters}
+              </p>
+            ) : null}
+            <div className="fill-actions">
+              <p className="learning-hints">
+                <kbd>Enter</kbd> check · <kbd>Esc</kbd> clear
+              </p>
+              <button
+                className="fill-submit"
+                type="submit"
+                disabled={!fullSentenceAnswer.trim() || feedback === 'correct'}
+              >
+                Check
+              </button>
+            </div>
+          </form>
+        ) : isAudioFirst && !sentenceComplete ? (
           <div className={`listening-prompt ${speaking ? 'is-speaking' : ''}`}>
-            <button
-              type="button"
-              aria-label="Play listening question"
-              onClick={onListen}
-            >
+            <span className="listening-prompt-icon" aria-hidden="true">
               <Headphones size={28} aria-hidden="true" />
-            </button>
+            </span>
             <div>
               <strong>{speaking ? 'Listening…' : 'Listen to the sentence'}</strong>
-              <span>Choose the target word you hear.</span>
+              <span>Use Replay if you need to hear it again.</span>
             </div>
           </div>
         ) : (
@@ -641,18 +907,23 @@ export function LearningScreen({
               activity={activity}
               feedback={visibleFeedback}
               answer={answer}
-              suffix={suffix}
-              inputWidth={Math.max(2, answer.length - firstLetter.length)}
+              fillValue={fillAnswer}
+              fillHintVisible={fillHintVisible}
+              fillInputRef={fillInputRef}
+              inputWidth={Math.max(2, answer.length)}
               sentenceComplete={sentenceComplete}
-              onSuffixChange={(value) => {
-                setSuffix(value)
+              onFillValueChange={(value) => {
+                setFillAnswer(value)
                 setEditedAfterAttempt(true)
               }}
               onFillKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault()
-                  setSuffix('')
+                  setFillAnswer('')
                   setEditedAfterAttempt(true)
+                } else if (event.key === 'Enter') {
+                  event.preventDefault()
+                  submitFill()
                 } else if (event.code === 'Space') {
                   event.preventDefault()
                   submitFill()
@@ -663,12 +934,12 @@ export function LearningScreen({
             {!sentenceComplete && activity === 'fill-words' ? (
               <div className="fill-actions">
                 <p className="learning-hints">
-                  First letter stays visible · <kbd>Space</kbd> check · <kbd>Esc</kbd> clear
+                  <kbd>Enter</kbd> or <kbd>Space</kbd> check · <kbd>Esc</kbd> clear
                 </p>
                 <button
                   className="fill-submit"
                   type="submit"
-                  disabled={!suffix.trim() || feedback === 'correct'}
+                  disabled={!canSubmitFill || feedback === 'correct'}
                 >
                   Check
                 </button>
@@ -707,18 +978,23 @@ export function LearningScreen({
             {visibleFeedback === 'incorrect' ? 'Not yet — try another answer.' : null}
             {visibleFeedback === 'correct' ? 'Correct' : null}
           </div>
-        ) : (
+        ) : null}
+
+        {saveSentenceError ? (
+          <p className="sentence-save-error" role="alert">
+            Could not update Saved. Please try again.
+          </p>
+        ) : null}
+
+        {sentenceComplete ? (
           <div className="sentence-complete" aria-live="polite">
-            <div className="sentence-complete-heading">
-              <span><Check size={16} aria-hidden="true" /> Sentence complete</span>
-              <button
-                type="button"
-                disabled={!speechSupported}
-                onClick={onListen}
-              >
-                <Volume2 size={16} aria-hidden="true" /> Listen
-              </button>
-            </div>
+            <span
+              className="sentence-complete-status"
+              role="status"
+              aria-label="Sentence complete"
+            >
+              <Check size={16} aria-hidden="true" />
+            </span>
             <p className="sentence-translation" lang="vi">{sentence.translationVi}</p>
             <dl className="lexeme-details">
               {sentenceTargetLexemes.map((lexeme) => (
@@ -734,35 +1010,28 @@ export function LearningScreen({
                 </div>
               ) : null}
             </dl>
-            <button className="sentence-continue" type="button" onClick={onContinue}>
-              Continue
-            </button>
+            <div className="sentence-complete-actions">
+              <button
+                className="sentence-continue"
+                type="button"
+                aria-label="Continue to next question. Keyboard shortcut Space"
+                title="Continue · Space"
+                onClick={onContinue}
+              >
+                <ArrowRight size={19} aria-hidden="true" />
+              </button>
+            </div>
           </div>
-        )}
+        ) : null}
 
         <footer className="learning-stage-footer">
           <span>
             Target {Math.max(1, activeTargetPosition)} of {activeTargetIds.length}
           </span>
-          <div className="learning-footer-actions">
-            <span className="learning-audio-shortcuts">
-              <kbd>↑</kbd> listen <kbd>↓</kbd> slower
-            </span>
-            <button
-              className={`question-audio-toggle ${audioEnabled ? 'is-enabled' : ''}`}
-              type="button"
-              disabled={!speechSupported}
-              aria-pressed={audioEnabled}
-              aria-label={`Automatic audio for new questions: ${audioEnabled ? 'on' : 'off'}`}
-              onClick={() => onAudioEnabledChange(!audioEnabled)}
-            >
-              {audioEnabled
-                ? <Volume2 size={16} aria-hidden="true" />
-                : <VolumeX size={16} aria-hidden="true" />}
-              <span>Auto audio</span>
-              <strong>{audioEnabled ? 'On' : 'Off'}</strong>
-            </button>
-          </div>
+          <span className="learning-audio-shortcuts">
+            <kbd>↑</kbd> replay <kbd>↓</kbd> slower
+            {sentenceComplete ? <><kbd>Space</kbd> continue</> : null}
+          </span>
         </footer>
       </section>
     </main>

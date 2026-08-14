@@ -19,26 +19,40 @@ import type {
   DiagnosticEvent,
   DiagnosticExportV1,
   DiagnosticRepository,
+  LearnerId,
   LearnerProgress,
   LessonPackCatalog,
   LessonPackRepository,
   PersistenceError,
   PersistenceErrorCode,
   PersistenceBackup,
+  PersistenceBackupV2,
   PersistenceProvider,
   ProgressRepository,
+  SavedSentenceRecord,
+  SavedSentenceRepository,
+  SessionCompletionRecord,
+  SessionHistoryRepository,
   SettingsRepository,
 } from './contracts.ts'
+import { DEFAULT_LEARNER_ID } from './contracts.ts'
 
 const databaseName = 'english-recall'
-const databaseVersion = 2
+const databaseVersion = 3
 const packStore = 'lesson-packs'
 const keyValueStore = 'key-value'
 const diagnosticStore = 'diagnostics'
-const progressKey = 'learner-progress'
-const sessionKey = 'active-session'
-const settingsKey = 'settings'
-export const BACKUP_SCHEMA_VERSION = 1 as const
+const savedSentenceStore = 'saved-sentences'
+const sessionHistoryStore = 'session-history'
+const legacyProgressKey = 'learner-progress'
+const legacySessionKey = 'active-session'
+const legacySettingsKey = 'settings'
+const scopedKey = (learnerId: LearnerId, name: string) =>
+  `learner:${learnerId}:${name}`
+const progressKey = scopedKey(DEFAULT_LEARNER_ID, 'progress')
+const sessionKey = scopedKey(DEFAULT_LEARNER_ID, 'active-session')
+const settingsKey = scopedKey(DEFAULT_LEARNER_ID, 'settings')
+export const BACKUP_SCHEMA_VERSION = 2 as const
 const backupFormat = 'english-recall-backup' as const
 const diagnosticFormat = 'english-recall-diagnostics' as const
 
@@ -49,6 +63,14 @@ interface StoredDiagnosticEvent extends DiagnosticEvent {
 interface StoredValue {
   readonly key: string
   readonly value: unknown
+}
+
+interface StoredSavedSentence extends SavedSentenceRecord {
+  readonly key: readonly [LearnerId, string, string]
+}
+
+interface StoredSessionCompletion extends SessionCompletionRecord {
+  readonly key: readonly [LearnerId, string]
 }
 
 function ok<T>(value: T): Result<T, PersistenceError> {
@@ -125,6 +147,58 @@ function isLearnerProgress(value: unknown): value is LearnerProgress {
     (progress.correctAnswers as number) <= (progress.totalAnswers as number) &&
     (progress.lastStudiedAt === undefined || isIsoDateTime(progress.lastStudiedAt))
   )
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function isUniqueStringArray(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(isNonEmptyString) &&
+    new Set(value).size === value.length
+  )
+}
+
+function isSavedSentenceRecord(value: unknown): value is SavedSentenceRecord {
+  if (!isStringRecord(value)) return false
+  return (
+    isNonEmptyString(value.learnerId) &&
+    isNonEmptyString(value.packId) &&
+    isNonEmptyString(value.sentenceId) &&
+    isIsoDateTime(value.savedAt)
+  )
+}
+
+function isSessionCompletionRecord(
+  value: unknown,
+): value is SessionCompletionRecord {
+  if (!isStringRecord(value)) return false
+  const reviewed = value.reviewedLexemeIds
+  if (
+    !isNonEmptyString(value.learnerId) ||
+    !isNonEmptyString(value.sessionId) ||
+    !isNonEmptyString(value.packId) ||
+    !isNonEmptyString(value.lessonId) ||
+    !isIsoDateTime(value.startedAt) ||
+    !isIsoDateTime(value.completedAt) ||
+    Date.parse(value.completedAt) < Date.parse(value.startedAt) ||
+    !isUniqueStringArray(reviewed) ||
+    !isUniqueStringArray(value.newlyLearnedLexemeIds) ||
+    !isUniqueStringArray(value.masteredLexemeIds) ||
+    !isUniqueStringArray(value.difficultLexemeIds) ||
+    !isNonNegativeInteger(value.correctAnswers) ||
+    !isNonNegativeInteger(value.incorrectAnswers) ||
+    !isNonNegativeInteger(value.skippedTargets)
+  ) return false
+
+  const reviewedSet = new Set(reviewed)
+  return [
+    value.newlyLearnedLexemeIds,
+    value.masteredLexemeIds,
+    value.difficultLexemeIds,
+  ].every((ids) => ids.every((id) => reviewedSet.has(id)))
 }
 
 function isStringRecord(value: unknown): value is Record<string, unknown> {
@@ -227,7 +301,8 @@ function isAttemptSignal(value: unknown): value is AttemptSignal {
     typeof value.targetId === 'string' &&
     (value.exerciseMode === 'word-choice' ||
       value.exerciseMode === 'fill-words' ||
-      value.exerciseMode === 'listening-choice') &&
+      value.exerciseMode === 'listening-choice' ||
+      value.exerciseMode === 'full-sentence') &&
     (value.outcome === 'correct' ||
       value.outcome === 'incorrect' ||
       value.outcome === 'skipped') &&
@@ -264,6 +339,7 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
   if (!isStringRecord(value)) return false
   const session = value
   const attempts = session.attemptsByLexemeId
+  const initialSchedules = session.initialSchedulesByLexemeId
   const schedules = session.schedulesByLexemeId
   const wrongChoices = session.wrongChoiceIdsByOccurrenceKey
   const activeTargets = session.activeTargetIdsBySentenceId
@@ -321,10 +397,12 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
     (session.learningMode === 'auto' ||
       session.learningMode === 'word-choice' ||
       session.learningMode === 'fill-words' ||
-      session.learningMode === 'listening-choice') &&
+      session.learningMode === 'listening-choice' ||
+      session.learningMode === 'full-sentence') &&
     (session.exerciseMode === 'word-choice' ||
       session.exerciseMode === 'fill-words' ||
-      session.exerciseMode === 'listening-choice') &&
+      session.exerciseMode === 'listening-choice' ||
+      session.exerciseMode === 'full-sentence') &&
     (session.lastEvaluation === undefined ||
       isAnswerEvaluation(session.lastEvaluation)) &&
     isStringRecord(wrongChoices) &&
@@ -335,6 +413,9 @@ function isSessionSnapshot(value: unknown): value is LearningSessionSnapshot {
     Object.values(attempts).every(isAttemptSummary) &&
     Array.isArray(session.attemptHistory) &&
     session.attemptHistory.every(isAttemptSignal) &&
+    (initialSchedules === undefined ||
+      (isStringRecord(initialSchedules) &&
+        Object.values(initialSchedules).every(isReviewSchedule))) &&
     isStringRecord(schedules) &&
     Object.values(schedules).every(isReviewSchedule) &&
     isIsoDateTime(session.startedAt) &&
@@ -347,6 +428,7 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
   if (!isStringRecord(value)) return undefined
   const audioEnabled = value.audioEnabled
   const speechRate = value.speechRate
+  const configuredSlowerSpeechRate = value.slowerSpeechRate
   if (
     typeof audioEnabled !== 'boolean' ||
     !Number.isFinite(speechRate) ||
@@ -356,11 +438,23 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
     return undefined
   }
 
+  const slowerSpeechRate = Number.isFinite(configuredSlowerSpeechRate)
+    ? configuredSlowerSpeechRate as number
+    : Math.max(0.5, Number(((speechRate as number) * 0.6).toFixed(2)))
+  if (
+    slowerSpeechRate < 0.5 ||
+    slowerSpeechRate > 1 ||
+    slowerSpeechRate > (speechRate as number)
+  ) {
+    return undefined
+  }
+
   if (
     (value.learningMode === 'auto' ||
       value.learningMode === 'word-choice' ||
       value.learningMode === 'fill-words' ||
-      value.learningMode === 'listening-choice') &&
+      value.learningMode === 'listening-choice' ||
+      value.learningMode === 'full-sentence') &&
     typeof value.autoAdvance === 'boolean'
   ) {
     return {
@@ -368,6 +462,7 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
       autoAdvance: value.autoAdvance,
       audioEnabled,
       speechRate: speechRate as number,
+      slowerSpeechRate,
     }
   }
 
@@ -377,6 +472,7 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
       autoAdvance: value.autoMode,
       audioEnabled,
       speechRate: speechRate as number,
+      slowerSpeechRate,
     }
   }
   return undefined
@@ -385,7 +481,13 @@ function normalizeSettings(value: unknown): AppSettings | undefined {
 function isCurrentSettings(value: unknown): value is AppSettings {
   return (
     isStringRecord(value) &&
-    hasExactKeys(value, ['learningMode', 'autoAdvance', 'audioEnabled', 'speechRate']) &&
+    hasExactKeys(value, [
+      'learningMode',
+      'autoAdvance',
+      'audioEnabled',
+      'speechRate',
+      'slowerSpeechRate',
+    ]) &&
     normalizeSettings(value) !== undefined
   )
 }
@@ -418,7 +520,7 @@ class IndexedDbConnection {
     this.databasePromise ??= new Promise((resolve, reject) => {
       const request = indexedDB.open(databaseName, databaseVersion)
 
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const database = request.result
         if (!database.objectStoreNames.contains(packStore)) {
           database.createObjectStore(packStore, { keyPath: 'id' })
@@ -431,6 +533,38 @@ class IndexedDbConnection {
             keyPath: 'id',
             autoIncrement: true,
           })
+        }
+        if (!database.objectStoreNames.contains(savedSentenceStore)) {
+          database.createObjectStore(savedSentenceStore, { keyPath: 'key' })
+        }
+        if (!database.objectStoreNames.contains(sessionHistoryStore)) {
+          database.createObjectStore(sessionHistoryStore, { keyPath: 'key' })
+        }
+
+        if ((event as IDBVersionChangeEvent).oldVersion < 3) {
+          const store = request.transaction?.objectStore(keyValueStore)
+          if (store) {
+            for (const [legacyKey, nextKey] of [
+              [legacyProgressKey, progressKey],
+              [legacySessionKey, sessionKey],
+              [legacySettingsKey, settingsKey],
+            ] as const) {
+              const nextRequest = store.get(nextKey)
+              nextRequest.onsuccess = () => {
+                if (nextRequest.result !== undefined) return
+                const legacyRequest = store.get(legacyKey)
+                legacyRequest.onsuccess = () => {
+                  if (legacyRequest.result !== undefined) {
+                    store.put({
+                      key: nextKey,
+                      value: (legacyRequest.result as StoredValue).value,
+                    } satisfies StoredValue)
+                    store.delete(legacyKey)
+                  }
+                }
+              }
+            }
+          }
         }
       }
       request.onsuccess = () => resolve(request.result)
@@ -473,6 +607,23 @@ async function removeStoredValue(
   const transaction = database.transaction(keyValueStore, 'readwrite')
   transaction.objectStore(keyValueStore).delete(key)
   await transactionComplete(transaction)
+}
+
+async function getScopedStoredValue(
+  connection: IndexedDbConnection,
+  operations: OperationQueue,
+  key: string,
+  legacyKey: string,
+): Promise<unknown> {
+  const current = await getStoredValue(connection, key)
+  if (current !== undefined) return current
+  const legacy = await getStoredValue(connection, legacyKey)
+  if (legacy === undefined) return undefined
+  await operations.run(async () => {
+    await saveStoredValue(connection, key, legacy)
+    await removeStoredValue(connection, legacyKey)
+  })
+  return legacy
 }
 
 class IndexedDbLessonPackRepository implements LessonPackRepository {
@@ -630,7 +781,12 @@ class IndexedDbProgressRepository implements ProgressRepository {
   async loadProgress(): Promise<Result<LearnerProgress | null, PersistenceError>> {
     try {
       await this.operations.idle()
-      const value = await getStoredValue(this.connection, progressKey)
+      const value = await getScopedStoredValue(
+        this.connection,
+        this.operations,
+        progressKey,
+        legacyProgressKey,
+      )
       if (value === undefined) return ok(null)
       if (!isLearnerProgress(value)) {
         return {
@@ -669,7 +825,12 @@ class IndexedDbProgressRepository implements ProgressRepository {
   > {
     try {
       await this.operations.idle()
-      const value = await getStoredValue(this.connection, sessionKey)
+      const value = await getScopedStoredValue(
+        this.connection,
+        this.operations,
+        sessionKey,
+        legacySessionKey,
+      )
       if (value === undefined) return ok(null)
       if (!isSessionSnapshot(value)) {
         if (isStringRecord(value) && Array.isArray(value.itemQueue)) {
@@ -748,6 +909,46 @@ class IndexedDbProgressRepository implements ProgressRepository {
       return { ok: false, error: toError(error, 'Could not save learning state') }
     }
   }
+
+  async completeSession(
+    progress: LearnerProgress,
+    completion: SessionCompletionRecord,
+  ): Promise<Result<void, PersistenceError>> {
+    if (
+      !isLearnerProgress(progress) ||
+      !isSessionCompletionRecord(completion) ||
+      completion.learnerId !== DEFAULT_LEARNER_ID
+    ) {
+      return {
+        ok: false,
+        error: { code: 'invalid-data', message: 'Completed session is invalid' },
+      }
+    }
+
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(
+          [keyValueStore, sessionHistoryStore],
+          'readwrite',
+        )
+        const values = transaction.objectStore(keyValueStore)
+        values.put({ key: progressKey, value: progress } satisfies StoredValue)
+        values.delete(sessionKey)
+        transaction.objectStore(sessionHistoryStore).put({
+          ...completion,
+          key: [completion.learnerId, completion.sessionId],
+        } satisfies StoredSessionCompletion)
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return {
+        ok: false,
+        error: toError(error, 'Could not save completed session'),
+      }
+    }
+  }
 }
 
 class IndexedDbSettingsRepository implements SettingsRepository {
@@ -761,7 +962,13 @@ class IndexedDbSettingsRepository implements SettingsRepository {
 
   async load(): Promise<Result<AppSettings | null, PersistenceError>> {
     try {
-      const value = await getStoredValue(this.connection, settingsKey)
+      await this.operations.idle()
+      const value = await getScopedStoredValue(
+        this.connection,
+        this.operations,
+        settingsKey,
+        legacySettingsKey,
+      )
       if (value === undefined) return ok(null)
       const settings = normalizeSettings(value)
       if (!settings) {
@@ -770,7 +977,7 @@ class IndexedDbSettingsRepository implements SettingsRepository {
           error: { code: 'invalid-data', message: 'Stored settings are invalid' },
         }
       }
-      if (isStringRecord(value) && !('learningMode' in value)) {
+      if (!isCurrentSettings(value)) {
         await this.operations.run(() =>
           saveStoredValue(this.connection, settingsKey, settings),
         )
@@ -799,6 +1006,146 @@ class IndexedDbSettingsRepository implements SettingsRepository {
   }
 }
 
+class IndexedDbSavedSentenceRepository implements SavedSentenceRepository {
+  private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
+  private readonly learnerId: LearnerId
+
+  constructor(
+    connection: IndexedDbConnection,
+    operations: OperationQueue,
+    learnerId: LearnerId,
+  ) {
+    this.connection = connection
+    this.operations = operations
+    this.learnerId = learnerId
+  }
+
+  async list(): Promise<Result<readonly SavedSentenceRecord[], PersistenceError>> {
+    try {
+      await this.operations.idle()
+      const database = await this.connection.get()
+      const transaction = database.transaction(savedSentenceStore, 'readonly')
+      const stored = await requestResult<StoredSavedSentence[]>(
+        transaction.objectStore(savedSentenceStore).getAll(),
+      )
+      const records = stored
+        .filter(({ learnerId }) => learnerId === this.learnerId)
+        .map(({ key: _key, ...record }) => record)
+      if (!records.every(isSavedSentenceRecord)) {
+        return { ok: false, error: { code: 'invalid-data', message: 'Stored saved sentences are invalid' } }
+      }
+      return ok(records.sort((a, b) => a.savedAt.localeCompare(b.savedAt)))
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not load saved sentences') }
+    }
+  }
+
+  async isSaved(packId: string, sentenceId: string): Promise<Result<boolean, PersistenceError>> {
+    try {
+      await this.operations.idle()
+      const database = await this.connection.get()
+      const transaction = database.transaction(savedSentenceStore, 'readonly')
+      const value = await requestResult<StoredSavedSentence | undefined>(
+        transaction.objectStore(savedSentenceStore).get([this.learnerId, packId, sentenceId]),
+      )
+      return ok(value !== undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not check saved sentence') }
+    }
+  }
+
+  async save(record: SavedSentenceRecord): Promise<Result<void, PersistenceError>> {
+    if (!isSavedSentenceRecord(record) || record.learnerId !== this.learnerId) {
+      return { ok: false, error: { code: 'invalid-data', message: 'Saved sentence is invalid' } }
+    }
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(savedSentenceStore, 'readwrite')
+        transaction.objectStore(savedSentenceStore).put({
+          ...record,
+          key: [record.learnerId, record.packId, record.sentenceId],
+        } satisfies StoredSavedSentence)
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not save sentence') }
+    }
+  }
+
+  async remove(packId: string, sentenceId: string): Promise<Result<void, PersistenceError>> {
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(savedSentenceStore, 'readwrite')
+        transaction.objectStore(savedSentenceStore).delete([this.learnerId, packId, sentenceId])
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not remove saved sentence') }
+    }
+  }
+}
+
+class IndexedDbSessionHistoryRepository implements SessionHistoryRepository {
+  private readonly connection: IndexedDbConnection
+  private readonly operations: OperationQueue
+  private readonly learnerId: LearnerId
+
+  constructor(
+    connection: IndexedDbConnection,
+    operations: OperationQueue,
+    learnerId: LearnerId,
+  ) {
+    this.connection = connection
+    this.operations = operations
+    this.learnerId = learnerId
+  }
+
+  async list(): Promise<Result<readonly SessionCompletionRecord[], PersistenceError>> {
+    try {
+      await this.operations.idle()
+      const database = await this.connection.get()
+      const transaction = database.transaction(sessionHistoryStore, 'readonly')
+      const stored = await requestResult<StoredSessionCompletion[]>(
+        transaction.objectStore(sessionHistoryStore).getAll(),
+      )
+      const records = stored
+        .filter(({ learnerId }) => learnerId === this.learnerId)
+        .map(({ key: _key, ...record }) => record)
+      if (!records.every(isSessionCompletionRecord)) {
+        return { ok: false, error: { code: 'invalid-data', message: 'Stored session history is invalid' } }
+      }
+      return ok(records.sort((a, b) => a.completedAt.localeCompare(b.completedAt)))
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not load session history') }
+    }
+  }
+
+  async append(record: SessionCompletionRecord): Promise<Result<void, PersistenceError>> {
+    if (!isSessionCompletionRecord(record) || record.learnerId !== this.learnerId) {
+      return { ok: false, error: { code: 'invalid-data', message: 'Session completion is invalid' } }
+    }
+    try {
+      await this.operations.run(async () => {
+        const database = await this.connection.get()
+        const transaction = database.transaction(sessionHistoryStore, 'readwrite')
+        transaction.objectStore(sessionHistoryStore).put({
+          ...record,
+          key: [record.learnerId, record.sessionId],
+        } satisfies StoredSessionCompletion)
+        await transactionComplete(transaction)
+      })
+      return ok(undefined)
+    } catch (error) {
+      return { ok: false, error: toError(error, 'Could not save session history') }
+    }
+  }
+}
+
 function backupValidationError(
   code: 'invalid-data' | 'unsupported-version',
   message: string,
@@ -806,21 +1153,22 @@ function backupValidationError(
   return { ok: false, error: { code, message } }
 }
 
-function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceError> {
+function validateBackup(input: unknown): Result<PersistenceBackupV2, PersistenceError> {
   if (!isStringRecord(input)) {
     return backupValidationError('invalid-data', 'Backup must be an object')
   }
   if (input.format !== backupFormat) {
     return backupValidationError('invalid-data', 'Backup format is invalid')
   }
-  if (input.schemaVersion !== BACKUP_SCHEMA_VERSION) {
+  if (input.schemaVersion !== 1 && input.schemaVersion !== BACKUP_SCHEMA_VERSION) {
     return backupValidationError(
       'unsupported-version',
       'Backup schema version is not supported',
     )
   }
-  if (
-    !hasExactKeys(input, [
+  const isV1 = input.schemaVersion === 1
+  const expectedKeys = isV1
+    ? [
       'format',
       'schemaVersion',
       'exportedAt',
@@ -828,9 +1176,27 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
       'progress',
       'activeSession',
       'settings',
-    ]) ||
+    ]
+    : [
+      'format',
+      'schemaVersion',
+      'exportedAt',
+      'learnerId',
+      'lessonPacks',
+      'progress',
+      'activeSession',
+      'settings',
+      'savedSentences',
+      'sessionHistory',
+    ]
+  if (
+    !hasExactKeys(input, expectedKeys) ||
     !isIsoDateTime(input.exportedAt) ||
-    !Array.isArray(input.lessonPacks)
+    !Array.isArray(input.lessonPacks) ||
+    (!isV1 &&
+      (input.learnerId !== DEFAULT_LEARNER_ID ||
+        !Array.isArray(input.savedSentences) ||
+        !Array.isArray(input.sessionHistory)))
   ) {
     return backupValidationError('invalid-data', 'Backup structure is invalid')
   }
@@ -852,9 +1218,30 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
   if (input.activeSession !== null && !isSessionSnapshot(input.activeSession)) {
     return backupValidationError('invalid-data', 'Backup active session is invalid')
   }
-  if (input.settings !== null && !isCurrentSettings(input.settings)) {
-    return backupValidationError('invalid-data', 'Backup settings are invalid')
+  let normalizedSettings: AppSettings | null = null
+  if (input.settings !== null) {
+    const parsedSettings = normalizeSettings(input.settings)
+    if (!parsedSettings) {
+      return backupValidationError('invalid-data', 'Backup settings are invalid')
+    }
+    normalizedSettings = parsedSettings
   }
+
+  const learnerId = isV1 ? DEFAULT_LEARNER_ID : input.learnerId as LearnerId
+  const savedSentences = isV1 ? [] : input.savedSentences as unknown[]
+  const sessionHistory = isV1 ? [] : input.sessionHistory as unknown[]
+  if (
+    !savedSentences.every(
+      (record) => isSavedSentenceRecord(record) && record.learnerId === learnerId,
+    ) ||
+    !sessionHistory.every(
+      (record) => isSessionCompletionRecord(record) && record.learnerId === learnerId,
+    )
+  ) {
+    return backupValidationError('invalid-data', 'Backup learner data is invalid')
+  }
+  const validSavedSentences = savedSentences as readonly SavedSentenceRecord[]
+  const validSessionHistory = sessionHistory as readonly SessionCompletionRecord[]
 
   const lexemeReviewKeys = new Set(
     packs.flatMap((pack) =>
@@ -862,16 +1249,28 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
     ),
   )
   if (
-    input.progress &&
-    !Object.keys(input.progress.schedulesByLexemeReviewKey).every((key) =>
-      lexemeReviewKeys.has(key),
-    )
+    new Set(
+      validSavedSentences.map((record) => `${record.packId}::${record.sentenceId}`),
+    ).size !== validSavedSentences.length
   ) {
     return backupValidationError(
       'invalid-data',
-      'Backup progress references an unknown lexeme',
+      'Backup contains duplicate saved sentences',
     )
   }
+  if (
+    new Set(validSessionHistory.map((record) => record.sessionId)).size !==
+      validSessionHistory.length
+  ) {
+    return backupValidationError(
+      'invalid-data',
+      'Backup contains duplicate session history',
+    )
+  }
+
+  // Learner-owned history may legitimately outlive updated or removed lesson
+  // content. Keep those opaque ids in backup/restore; current UI and planners
+  // simply ignore unresolved content. Active sessions remain strictly checked.
 
   if (input.activeSession) {
     const session = input.activeSession
@@ -927,6 +1326,7 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
     })
     const lexemeRefsAreValid = [
       ...Object.keys(session.attemptsByLexemeId),
+      ...Object.keys(session.initialSchedulesByLexemeId ?? {}),
       ...Object.keys(session.schedulesByLexemeId),
     ].every((lexemeId) => lexemeIds.has(lexemeId))
     if (
@@ -953,10 +1353,13 @@ function validateBackup(input: unknown): Result<PersistenceBackup, PersistenceEr
     format: backupFormat,
     schemaVersion: BACKUP_SCHEMA_VERSION,
     exportedAt: input.exportedAt,
+    learnerId,
     lessonPacks: packs,
     progress: input.progress,
     activeSession: input.activeSession,
-    settings: input.settings,
+    settings: normalizedSettings,
+    savedSentences: validSavedSentences,
+    sessionHistory: validSessionHistory,
   })
 }
 
@@ -977,7 +1380,7 @@ class IndexedDbBackupRepository implements BackupRepository {
       return await this.operations.run(async () => {
         const database = await this.connection.get()
         const transaction = database.transaction(
-          [packStore, keyValueStore],
+          [packStore, keyValueStore, savedSentenceStore, sessionHistoryStore],
           'readonly',
         )
         const packsRequest = transaction.objectStore(packStore).getAll()
@@ -985,11 +1388,15 @@ class IndexedDbBackupRepository implements BackupRepository {
         const progressRequest = keyValues.get(progressKey)
         const sessionRequest = keyValues.get(sessionKey)
         const settingsRequest = keyValues.get(settingsKey)
-        const [lessonPacks, progress, activeSession, settings] = await Promise.all([
+        const savedRequest = transaction.objectStore(savedSentenceStore).getAll()
+        const historyRequest = transaction.objectStore(sessionHistoryStore).getAll()
+        const [lessonPacks, progress, activeSession, settings, saved, history] = await Promise.all([
           requestResult<unknown[]>(packsRequest),
           requestResult<StoredValue | undefined>(progressRequest),
           requestResult<StoredValue | undefined>(sessionRequest),
           requestResult<StoredValue | undefined>(settingsRequest),
+          requestResult<StoredSavedSentence[]>(savedRequest),
+          requestResult<StoredSessionCompletion[]>(historyRequest),
         ])
         const normalizedLessonPacks = lessonPacks.flatMap((value) => {
           try {
@@ -1004,10 +1411,17 @@ class IndexedDbBackupRepository implements BackupRepository {
           format: backupFormat,
           schemaVersion: BACKUP_SCHEMA_VERSION,
           exportedAt: new Date().toISOString(),
+          learnerId: DEFAULT_LEARNER_ID,
           lessonPacks: normalizedLessonPacks,
           progress: progress?.value ?? null,
           activeSession: activeSession?.value ?? null,
           settings: settings?.value ?? null,
+          savedSentences: saved
+            .filter(({ learnerId }) => learnerId === DEFAULT_LEARNER_ID)
+            .map(({ key: _key, ...record }) => record),
+          sessionHistory: history
+            .filter(({ learnerId }) => learnerId === DEFAULT_LEARNER_ID)
+            .map(({ key: _key, ...record }) => record),
         })
       })
     } catch (error) {
@@ -1023,17 +1437,21 @@ class IndexedDbBackupRepository implements BackupRepository {
       await this.operations.run(async () => {
         const database = await this.connection.get()
         const transaction = database.transaction(
-          [packStore, keyValueStore],
+          [packStore, keyValueStore, savedSentenceStore, sessionHistoryStore],
           'readwrite',
         )
         try {
           const packs = transaction.objectStore(packStore)
           const keyValues = transaction.objectStore(keyValueStore)
+          const saved = transaction.objectStore(savedSentenceStore)
+          const history = transaction.objectStore(sessionHistoryStore)
           packs.clear()
           for (const pack of validated.value.lessonPacks) packs.put(pack)
           keyValues.delete(progressKey)
           keyValues.delete(sessionKey)
           keyValues.delete(settingsKey)
+          saved.clear()
+          history.clear()
           if (validated.value.progress) {
             keyValues.put({ key: progressKey, value: validated.value.progress })
           }
@@ -1042,6 +1460,18 @@ class IndexedDbBackupRepository implements BackupRepository {
           }
           if (validated.value.settings) {
             keyValues.put({ key: settingsKey, value: validated.value.settings })
+          }
+          for (const record of validated.value.savedSentences) {
+            saved.put({
+              ...record,
+              key: [record.learnerId, record.packId, record.sentenceId],
+            } satisfies StoredSavedSentence)
+          }
+          for (const record of validated.value.sessionHistory) {
+            history.put({
+              ...record,
+              key: [record.learnerId, record.sessionId],
+            } satisfies StoredSessionCompletion)
           }
           await transactionComplete(transaction)
         } catch (error) {
@@ -1166,6 +1596,8 @@ export class IndexedDbPersistenceProvider implements PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
+  readonly savedSentences: SavedSentenceRepository
+  readonly sessionHistory: SessionHistoryRepository
   readonly backup: BackupRepository
   readonly diagnostics: DiagnosticRepository
 
@@ -1176,6 +1608,16 @@ export class IndexedDbPersistenceProvider implements PersistenceProvider {
     this.lessonPacks = new IndexedDbLessonPackRepository(connection, operations)
     this.progress = new IndexedDbProgressRepository(connection, operations)
     this.settings = new IndexedDbSettingsRepository(connection, operations)
+    this.savedSentences = new IndexedDbSavedSentenceRepository(
+      connection,
+      operations,
+      DEFAULT_LEARNER_ID,
+    )
+    this.sessionHistory = new IndexedDbSessionHistoryRepository(
+      connection,
+      operations,
+      DEFAULT_LEARNER_ID,
+    )
     this.backup = new IndexedDbBackupRepository(connection, operations)
     this.diagnostics = new IndexedDbDiagnosticRepository(
       connection,

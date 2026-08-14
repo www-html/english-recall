@@ -7,7 +7,9 @@ export type {
   DiagnosticLevel,
   DiagnosticMetadataValue,
   DiagnosticRepository,
+  LearnerId,
   LearnerProgress,
+  LearnerSyncSnapshotV1,
   LessonPackCatalog,
   LessonPackRepository,
   LessonPackSummary,
@@ -15,15 +17,23 @@ export type {
   PersistenceErrorCode,
   PersistenceBackup,
   PersistenceBackupV1,
+  PersistenceBackupV2,
   PersistenceProvider,
   ProgressRepository,
+  SavedSentenceRecord,
+  SavedSentenceRepository,
+  SessionCompletionRecord,
+  SessionHistoryRepository,
   SettingsRepository,
   SkippedLessonPack,
+  SyncProvider,
+  SyncRepository,
 } from './contracts.ts'
 export {
   createInitialProgress,
   createReviewKey,
   defaultAppSettings,
+  DEFAULT_LEARNER_ID,
   MAX_DIAGNOSTIC_EVENTS,
 } from './contracts.ts'
 export {
@@ -35,3 +45,7 @@ export {
   recordLocalDiagnostic,
   type DiagnosticInput,
 } from './diagnostics.ts'
+export {
+  createSessionCompletionRecord,
+  type SessionCompletionFactsInput,
+} from './session-history.ts'

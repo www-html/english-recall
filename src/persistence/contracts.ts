@@ -7,9 +7,15 @@ import type {
 import type {
   IsoDateTime,
   LexemeId,
+  LessonId,
   LessonPackId,
   Result,
+  SentenceId,
+  SessionId,
 } from '../shared/types.ts'
+
+export type LearnerId = string
+export const DEFAULT_LEARNER_ID: LearnerId = 'default'
 
 export interface LessonPackSummary {
   readonly id: LessonPackId
@@ -43,6 +49,7 @@ export interface AppSettings {
   readonly autoAdvance: boolean
   readonly audioEnabled: boolean
   readonly speechRate: number
+  readonly slowerSpeechRate: number
 }
 
 export type PersistenceErrorCode =
@@ -80,11 +87,62 @@ export interface ProgressRepository {
     progress: LearnerProgress,
     activeSession: LearningSessionSnapshot | null,
   ): Promise<Result<void, PersistenceError>>
+  /** Atomically saves final progress, clears resume state, and records history. */
+  completeSession(
+    progress: LearnerProgress,
+    completion: SessionCompletionRecord,
+  ): Promise<Result<void, PersistenceError>>
 }
 
 export interface SettingsRepository {
   load(): Promise<Result<AppSettings | null, PersistenceError>>
   save(settings: AppSettings): Promise<Result<void, PersistenceError>>
+}
+
+export interface SavedSentenceRecord {
+  readonly learnerId: LearnerId
+  readonly packId: LessonPackId
+  readonly sentenceId: SentenceId
+  readonly savedAt: IsoDateTime
+}
+
+export interface SavedSentenceRepository {
+  list(): Promise<Result<readonly SavedSentenceRecord[], PersistenceError>>
+  isSaved(
+    packId: LessonPackId,
+    sentenceId: SentenceId,
+  ): Promise<Result<boolean, PersistenceError>>
+  save(record: SavedSentenceRecord): Promise<Result<void, PersistenceError>>
+  remove(
+    packId: LessonPackId,
+    sentenceId: SentenceId,
+  ): Promise<Result<void, PersistenceError>>
+}
+
+/**
+ * Immutable facts captured when a session completes. Arrays contain unique ids:
+ * reviewed = real SRS commits only; newly learned = reviewed lexemes without a
+ * pre-session schedule; mastered = mastery crossings from below 70 to at least 70.
+ */
+export interface SessionCompletionRecord {
+  readonly learnerId: LearnerId
+  readonly sessionId: SessionId
+  readonly packId: LessonPackId
+  readonly lessonId: LessonId
+  readonly startedAt: IsoDateTime
+  readonly completedAt: IsoDateTime
+  readonly reviewedLexemeIds: readonly LexemeId[]
+  readonly newlyLearnedLexemeIds: readonly LexemeId[]
+  readonly masteredLexemeIds: readonly LexemeId[]
+  readonly difficultLexemeIds: readonly LexemeId[]
+  readonly correctAnswers: number
+  readonly incorrectAnswers: number
+  readonly skippedTargets: number
+}
+
+export interface SessionHistoryRepository {
+  list(): Promise<Result<readonly SessionCompletionRecord[], PersistenceError>>
+  append(record: SessionCompletionRecord): Promise<Result<void, PersistenceError>>
 }
 
 export interface PersistenceBackupV1 {
@@ -97,7 +155,20 @@ export interface PersistenceBackupV1 {
   readonly settings: AppSettings | null
 }
 
-export type PersistenceBackup = PersistenceBackupV1
+export interface PersistenceBackupV2 {
+  readonly format: 'english-recall-backup'
+  readonly schemaVersion: 2
+  readonly exportedAt: IsoDateTime
+  readonly learnerId: LearnerId
+  readonly lessonPacks: readonly LessonPack[]
+  readonly progress: LearnerProgress | null
+  readonly activeSession: LearningSessionSnapshot | null
+  readonly settings: AppSettings | null
+  readonly savedSentences: readonly SavedSentenceRecord[]
+  readonly sessionHistory: readonly SessionCompletionRecord[]
+}
+
+export type PersistenceBackup = PersistenceBackupV1 | PersistenceBackupV2
 
 export interface BackupRepository {
   export(): Promise<Result<PersistenceBackup, PersistenceError>>
@@ -170,10 +241,35 @@ export interface DiagnosticRepository {
   clear(): Promise<Result<void, PersistenceError>>
 }
 
+export interface LearnerSyncSnapshotV1 {
+  readonly schemaVersion: 1
+  readonly learnerId: LearnerId
+  readonly capturedAt: IsoDateTime
+  readonly progress: LearnerProgress | null
+  readonly activeSession: LearningSessionSnapshot | null
+  readonly settings: AppSettings | null
+  readonly savedSentences: readonly SavedSentenceRecord[]
+  readonly sessionHistory: readonly SessionCompletionRecord[]
+}
+
+export interface SyncRepository {
+  pull(
+    learnerId: LearnerId,
+  ): Promise<Result<LearnerSyncSnapshotV1 | null, PersistenceError>>
+  push(snapshot: LearnerSyncSnapshotV1): Promise<Result<void, PersistenceError>>
+}
+
+/** Optional future boundary. The local provider does not configure remote sync. */
+export interface SyncProvider {
+  readonly sync: SyncRepository
+}
+
 export interface PersistenceProvider {
   readonly lessonPacks: LessonPackRepository
   readonly progress: ProgressRepository
   readonly settings: SettingsRepository
+  readonly savedSentences: SavedSentenceRepository
+  readonly sessionHistory: SessionHistoryRepository
   readonly backup: BackupRepository
   readonly diagnostics: DiagnosticRepository
 }
@@ -199,4 +295,5 @@ export const defaultAppSettings: AppSettings = {
   autoAdvance: false,
   audioEnabled: true,
   speechRate: 0.9,
+  slowerSpeechRate: 0.55,
 }

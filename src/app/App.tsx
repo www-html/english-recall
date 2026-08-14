@@ -12,11 +12,32 @@ import {
 import { decideLessonPackUpdate } from '../domain/lesson-pack-update.ts'
 import { HomeScreen } from '../features/home/HomeScreen.tsx'
 import {
+  LessonDetailScreen,
+  type LessonStartSelection,
+} from '../features/lessons/LessonDetailScreen.tsx'
+import { LessonLibraryScreen } from '../features/lessons/LessonLibraryScreen.tsx'
+import { PackDetailScreen } from '../features/lessons/PackDetailScreen.tsx'
+import { SettingsScreen } from '../features/settings/SettingsScreen.tsx'
+import {
+  EXCEL_LESSON_PACK_TEMPLATE_URL,
+  ExcelLessonPackImportError,
+  readLessonPacksFromExcel,
+} from '../features/import/excel-lesson-pack.ts'
+import {
   LearningScreen,
   type ChoiceOption,
   type LearningFeedback,
 } from '../features/learning/LearningScreen.tsx'
 import { PauseScreen } from '../features/pause/PauseScreen.tsx'
+import {
+  ProgressScreen,
+  type ProgressScreenState,
+} from '../features/progress/ProgressScreen.tsx'
+import {
+  SavedScreen,
+  type SavedSentenceViewModel,
+  type SavedSentencesState,
+} from '../features/saved/SavedScreen.tsx'
 import { SummaryScreen } from '../features/summary/SummaryScreen.tsx'
 import {
   createTargetOccurrenceKey,
@@ -26,26 +47,57 @@ import {
   type LearningMode,
   type LearningResponse,
   type LearningSessionSnapshot,
+  type ReviewSchedule,
 } from '../learning-engine/index.ts'
 import {
+  createSessionCompletionRecord,
   createInitialProgress,
   createDiagnosticRecorder,
   createReviewKey,
+  DEFAULT_LEARNER_ID,
   defaultAppSettings,
   IndexedDbPersistenceProvider,
   type AppSettings,
+  type SavedSentenceRecord,
+  type SessionCompletionRecord,
   type LearnerProgress,
   type DiagnosticInput,
 } from '../persistence/index.ts'
+import type { LexemeId } from '../shared/types.ts'
 import './app.css'
 import {
   createDailyLearningPlan,
   createStableChoices,
 } from './session-planning.ts'
-import { getSlowerSpeechRate, useSpeech } from './use-speech.ts'
+import { prepareExcelPackUpdate } from './excel-import-planning.ts'
+import { shouldAllowLearningSpeech, useSpeech } from './use-speech.ts'
 import { diagnosticsForAttemptTransition } from './session-diagnostics.ts'
 
-type AppView = 'home' | 'learning' | 'pause' | 'summary'
+type AppView =
+  | 'home'
+  | 'lessons'
+  | 'pack-detail'
+  | 'lesson-detail'
+  | 'saved'
+  | 'progress'
+  | 'settings'
+  | 'learning'
+  | 'pause'
+  | 'summary'
+
+function settingsWithSpeechRate(
+  settings: AppSettings,
+  speechRate: number,
+): AppSettings {
+  return {
+    ...settings,
+    speechRate,
+    slowerSpeechRate: Math.min(
+      settings.slowerSpeechRate,
+      Math.max(0.5, Number((speechRate - 0.05).toFixed(2))),
+    ),
+  }
+}
 
 interface SessionContext {
   readonly pack: LessonPack
@@ -216,6 +268,53 @@ function feedbackForSession(
   return 'idle'
 }
 
+function resolveSavedSentences(
+  records: readonly SavedSentenceRecord[],
+  packs: readonly LessonPack[],
+): readonly SavedSentenceViewModel[] {
+  return records.flatMap((record) => {
+    const pack = packs.find((candidate) => candidate.id === record.packId)
+    const lesson = pack?.lessons.find((candidate) =>
+      candidate.sentences.some((sentence) => sentence.id === record.sentenceId),
+    )
+    const sentence = lesson?.sentences.find(
+      (candidate) => candidate.id === record.sentenceId,
+    )
+    if (!pack || !lesson || !sentence) return []
+    return [{
+      key: `${record.packId}::${record.sentenceId}`,
+      packId: record.packId,
+      sentenceId: record.sentenceId,
+      packTitle: pack.title,
+      lessonTitle: lesson.title,
+      topic: sentence.topic,
+      sentenceText: sentence.displayText,
+      translationVi: sentence.translationVi,
+    }]
+  })
+}
+
+function lessonFromTopicSelection({
+  lesson,
+  selectedTopics,
+  mixTopics,
+}: LessonStartSelection): Lesson {
+  const selected = new Set(selectedTopics)
+  const sentences = lesson.sentences.filter((sentence) =>
+    selected.has(sentence.topic),
+  )
+  if (!mixTopics || selectedTopics.length < 2) return { ...lesson, sentences }
+
+  const queues = selectedTopics.map((topic) =>
+    sentences.filter((sentence) => sentence.topic === topic),
+  )
+  const mixed = Array.from(
+    { length: Math.max(0, ...queues.map((queue) => queue.length)) },
+    (_, index) => queues.flatMap((queue) => queue[index] ? [queue[index]] : []),
+  ).flat()
+  return { ...lesson, sentences: mixed }
+}
+
 export default function App() {
   const provider = useMemo(() => new IndexedDbPersistenceProvider(), [])
   const recordDiagnostic = useMemo(
@@ -230,8 +329,21 @@ export default function App() {
     stop: stopSpeaking,
   } = useSpeech()
   const [view, setView] = useState<AppView>('home')
+  const [selectedPackId, setSelectedPackId] = useState<string>()
+  const [selectedLessonId, setSelectedLessonId] = useState<string>()
   const [booting, setBooting] = useState(true)
   const [packs, setPacks] = useState<readonly LessonPack[]>([])
+  const [savedSentenceRecords, setSavedSentenceRecords] = useState<
+    readonly SavedSentenceRecord[]
+  >([])
+  const [savedSentenceStatus, setSavedSentenceStatus] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading')
+  const [savedSentenceError, setSavedSentenceError] = useState<string>()
+  const [sessionHistory, setSessionHistory] = useState<
+    readonly SessionCompletionRecord[]
+  >([])
+  const [historyError, setHistoryError] = useState<string>()
   const [progress, setProgress] = useState<LearnerProgress>(createInitialProgress)
   const progressRef = useRef(progress)
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings)
@@ -241,6 +353,9 @@ export default function App() {
   const [storageAvailable, setStorageAvailable] = useState(true)
   const [notice, setNotice] = useState<string>()
   const completedSessions = useRef(new Set<string>())
+  const sessionBaselines = useRef(
+    new Map<string, Readonly<Record<LexemeId, ReviewSchedule>>>(),
+  )
   const lastAutoSpokenQuestion = useRef<string | undefined>(undefined)
   const lastPresentedQuestion = useRef<string | undefined>(undefined)
   const previousEngineState = useRef<LearningEngineState>({ status: 'idle' })
@@ -262,12 +377,21 @@ export default function App() {
         builtInDecision.action === 'replace'
           ? await provider.lessonPacks.save(builtInPack)
           : { ok: true as const, value: undefined }
-      const [packListResult, progressResult, settingsResult, sessionResult] =
+      const [
+        packListResult,
+        progressResult,
+        settingsResult,
+        sessionResult,
+        savedSentencesResult,
+        sessionHistoryResult,
+      ] =
         await Promise.all([
           provider.lessonPacks.list(),
           provider.progress.loadProgress(),
           provider.settings.load(),
           provider.progress.loadActiveSession(),
+          provider.savedSentences.list(),
+          provider.sessionHistory.list(),
         ])
 
       if (!active) return
@@ -290,9 +414,6 @@ export default function App() {
         }
       } else {
         setStorageAvailable(false)
-        setNotice(
-          'IndexedDB is unavailable. Learning works, but progress cannot be saved.',
-        )
       }
 
       const loadedProgress =
@@ -308,6 +429,20 @@ export default function App() {
       setPacks(loadedPacks)
       setProgress(loadedProgress)
       setSettings(loadedSettings)
+      if (savedSentencesResult.ok) {
+        setSavedSentenceRecords(savedSentencesResult.value)
+        setSavedSentenceStatus('ready')
+        setSavedSentenceError(undefined)
+      } else {
+        setSavedSentenceStatus('error')
+        setSavedSentenceError(savedSentencesResult.error.message)
+      }
+      if (sessionHistoryResult.ok) {
+        setSessionHistory(sessionHistoryResult.value)
+        setHistoryError(undefined)
+      } else {
+        setHistoryError(sessionHistoryResult.error.message)
+      }
 
       if (sessionResult.ok && sessionResult.value) {
         const savedPack = loadedPacks.find(
@@ -319,10 +454,21 @@ export default function App() {
             snapshot: sessionResult.value,
           })
           if (restored.ok && restored.value.current.status === 'active') {
+            const restoredSession = restored.value.current.session
+            sessionBaselines.current.set(
+              restoredSession.id,
+              schedulesForSession(
+                loadedProgress,
+                savedPack,
+                savedPack.lessons.find(
+                  (lesson) => lesson.id === restoredSession.lessonId,
+                ) ?? savedPack.lessons[0]!,
+              ),
+            )
             recordDiagnostic({
               level: 'info',
               event: 'session_restored',
-              ...diagnosticSessionContext(restored.value.current.session),
+              ...diagnosticSessionContext(restoredSession),
             })
           } else if (!restored.ok) {
             recordDiagnostic({
@@ -423,6 +569,14 @@ export default function App() {
           withSchedules.correctAnswers + engineState.result.correctAnswers,
         lastStudiedAt: engineState.result.completedAt,
       }
+      const completionRecord = createSessionCompletionRecord({
+        session: engineState.session,
+        result: engineState.result,
+        preSessionSchedulesByLexemeId:
+          engineState.session.initialSchedulesByLexemeId ??
+          sessionBaselines.current.get(engineState.session.id) ??
+          engineState.session.schedulesByLexemeId,
+      })
 
       progressRef.current = nextProgress
       setProgress(nextProgress)
@@ -438,8 +592,16 @@ export default function App() {
           completedTargets: engineState.result.completedTargets,
         },
       })
-      void provider.progress.saveLearningState(nextProgress, null).then((result) => {
+      void provider.progress.completeSession(nextProgress, completionRecord).then((result) => {
+        sessionBaselines.current.delete(engineState.session.id)
         if (result.ok) {
+          setSessionHistory((current) => [
+            ...current.filter(
+              (record) => record.sessionId !== completionRecord.sessionId,
+            ),
+            completionRecord,
+          ])
+          setHistoryError(undefined)
           recordDiagnostic({
             level: 'info',
             event: 'learning_state_saved',
@@ -456,6 +618,7 @@ export default function App() {
           })
           setStorageAvailable(false)
           setNotice(`Session completed, but local storage could not be updated: ${result.error.message}`)
+          setHistoryError(result.error.message)
         }
       })
     }
@@ -520,8 +683,32 @@ export default function App() {
             ),
     }
   }, [progress])
+  const selectedPack = packs.find((pack) => pack.id === selectedPackId)
+  const selectedLesson = selectedPack?.lessons.find(
+    (lesson) => lesson.id === selectedLessonId,
+  )
+  const savedSentenceItems = useMemo(
+    () => resolveSavedSentences(savedSentenceRecords, packs),
+    [packs, savedSentenceRecords],
+  )
+  const savedScreenState: SavedSentencesState =
+    savedSentenceStatus === 'loading'
+      ? { status: 'loading' }
+      : savedSentenceStatus === 'error'
+        ? {
+            status: 'error',
+            message: savedSentenceError ?? 'Saved sentences are unavailable.',
+          }
+        : { status: 'ready', items: savedSentenceItems }
+  const progressScreenState: ProgressScreenState = historyError
+    ? { status: 'error', message: historyError }
+    : { status: 'ready', history: sessionHistory, packs }
 
   useEffect(() => {
+    if (!shouldAllowLearningSpeech(view, engineState.status)) {
+      stopSpeaking()
+      return
+    }
     if (engineState.status !== 'active' || !context) return
     const { session } = engineState
 
@@ -557,7 +744,7 @@ export default function App() {
       const timeout = window.setTimeout(() => engine.advance(), 2_000)
       return () => window.clearTimeout(timeout)
     }
-  }, [context, engine, engineState, settings, speak])
+  }, [context, engine, engineState, settings, speak, stopSpeaking, view])
 
   const updateSettings = (next: AppSettings) => {
     setSettings(next)
@@ -622,6 +809,10 @@ export default function App() {
       return
     }
     if (result.value.current.status === 'active') {
+      sessionBaselines.current.set(
+        result.value.current.session.id,
+        schedulesForSession(progressRef.current, pack, lesson),
+      )
       recordDiagnostic({
         level: 'info',
         event: 'session_started',
@@ -633,6 +824,72 @@ export default function App() {
     }
     setNotice(undefined)
     setView('learning')
+  }
+
+  const reloadSavedSentences = async () => {
+    setSavedSentenceStatus('loading')
+    const result = await provider.savedSentences.list()
+    if (result.ok) {
+      setSavedSentenceRecords(result.value)
+      setSavedSentenceStatus('ready')
+      setSavedSentenceError(undefined)
+    } else {
+      setSavedSentenceStatus('error')
+      setSavedSentenceError(result.error.message)
+    }
+  }
+
+  const setCurrentSentenceSaved = async (saved: boolean) => {
+    if (!context) return
+    const result = saved
+      ? await provider.savedSentences.save({
+          learnerId: DEFAULT_LEARNER_ID,
+          packId: context.pack.id,
+          sentenceId: context.sentence.id,
+          savedAt: new Date().toISOString(),
+        })
+      : await provider.savedSentences.remove(
+          context.pack.id,
+          context.sentence.id,
+        )
+    if (!result.ok) {
+      setNotice(`Could not update Saved sentences: ${result.error.message}`)
+      throw new Error(result.error.message)
+    }
+    await reloadSavedSentences()
+  }
+
+  const removeSavedSentence = async (item: SavedSentenceViewModel) => {
+    const result = await provider.savedSentences.remove(item.packId, item.sentenceId)
+    if (!result.ok) throw new Error(result.error.message)
+    setSavedSentenceRecords((current) =>
+      current.filter(
+        (record) =>
+          record.packId !== item.packId || record.sentenceId !== item.sentenceId,
+      ),
+    )
+  }
+
+  const practiceSavedSentence = (item: SavedSentenceViewModel) => {
+    const pack = packs.find((candidate) => candidate.id === item.packId)
+    const lesson = pack?.lessons.find((candidate) =>
+      candidate.sentences.some((sentence) => sentence.id === item.sentenceId),
+    )
+    const sentence = lesson?.sentences.find(
+      (candidate) => candidate.id === item.sentenceId,
+    )
+    if (!pack || !lesson || !sentence) {
+      setNotice('This saved sentence is no longer available in its lesson pack.')
+      return
+    }
+    const scopedLesson = { ...lesson, sentences: [sentence] }
+    const scopedPack = {
+      ...pack,
+      lessons: pack.lessons.map((candidate) =>
+        candidate.id === lesson.id ? scopedLesson : candidate,
+      ),
+    }
+    startLesson(scopedPack, scopedLesson)
   }
 
   const startDailyLearning = () => {
@@ -798,6 +1055,105 @@ export default function App() {
     }
   }
 
+  const importExcelLessonPacks = async (file: File) => {
+    try {
+      const importedPacks = await readLessonPacksFromExcel(file)
+      const savedPacks: LessonPack[] = []
+      const plannedPacks = importedPacks.map((parsedPack) => {
+        const currentPack =
+          packs.find((pack) => pack.id === parsedPack.id) ?? null
+        const importedPack = prepareExcelPackUpdate(currentPack, parsedPack)
+        return {
+          importedPack,
+          decision: decideLessonPackUpdate(currentPack, importedPack),
+        }
+      })
+      const rejected = plannedPacks.find(
+        ({ decision }) => decision.action === 'reject',
+      )
+      if (rejected?.decision.action === 'reject') {
+        recordDiagnostic({
+          level: 'warn',
+          event: 'lesson_pack_rejected',
+          packId: rejected.importedPack.id,
+          errorCode: rejected.decision.reason,
+          metadata: {
+            source: 'excel',
+            version: rejected.importedPack.version,
+          },
+        })
+        setNotice(
+          `Could not import “${rejected.importedPack.title}”: use a newer semantic version for changed content. No packs were changed.`,
+        )
+        return
+      }
+
+      for (const { importedPack, decision } of plannedPacks) {
+        if (decision.action === 'unchanged') continue
+        const saved = await provider.lessonPacks.save(importedPack)
+        if (!saved.ok) {
+          recordDiagnostic({
+            level: 'error',
+            event: 'persistence_failed',
+            packId: importedPack.id,
+            errorCode: saved.error.code,
+            metadata: { operation: 'save_excel_lesson_pack' },
+          })
+          setNotice(
+            `${savedPacks.length > 0 ? `Imported ${savedPacks.length} pack${savedPacks.length === 1 ? '' : 's'}. ` : ''}Could not save “${importedPack.title}”: ${saved.error.message}`,
+          )
+          return
+        }
+        savedPacks.push(importedPack)
+        setPacks((current) => [
+          ...current.filter((pack) => pack.id !== importedPack.id),
+          importedPack,
+        ])
+        recordDiagnostic({
+          level: 'info',
+          event:
+            decision.action === 'replace'
+              ? 'lesson_pack_updated'
+              : 'lesson_pack_imported',
+          packId: importedPack.id,
+          metadata: { source: 'excel', version: importedPack.version },
+        })
+      }
+      setNotice(
+        savedPacks.length === 0
+          ? 'All lesson packs in this workbook are already up to date.'
+          : `Imported ${savedPacks.length} lesson pack${savedPacks.length === 1 ? '' : 's'} from Excel.`,
+      )
+    } catch (error) {
+      if (error instanceof ExcelLessonPackImportError) {
+        recordDiagnostic({
+          level: 'warn',
+          event: 'lesson_pack_rejected',
+          errorCode: error.issues[0]?.code ?? 'invalid-or-unsupported',
+          metadata: { source: 'excel', issueCount: error.issues.length },
+        })
+        setNotice(error.issues[0]?.message ?? 'Could not import this Excel workbook.')
+        return
+      }
+      setNotice(
+        `Could not import Excel workbook: ${error instanceof Error ? error.message : 'Unknown import error'}`,
+      )
+      recordDiagnostic({
+        level: 'warn',
+        event: 'lesson_pack_rejected',
+        errorCode: 'invalid-or-unsupported',
+        metadata: { source: 'excel' },
+      })
+    }
+  }
+
+  const downloadExcelTemplate = () => {
+    const link = document.createElement('a')
+    link.href = EXCEL_LESSON_PACK_TEMPLATE_URL
+    link.download = 'english-recall-lesson-pack-template.xlsx'
+    link.click()
+  }
+
   const exportBackup = async () => {
     const result = await provider.backup.export()
     if (!result.ok) {
@@ -902,6 +1258,40 @@ export default function App() {
     })
   }
 
+  const openPack = (pack: LessonPack) => {
+    setSelectedPackId(pack.id)
+    setSelectedLessonId(undefined)
+    setView('pack-detail')
+  }
+
+  const openLesson = (lesson: Lesson) => {
+    setSelectedLessonId(lesson.id)
+    setView('lesson-detail')
+  }
+
+  const startSelectedLesson = (selection: LessonStartSelection) => {
+    const lesson = lessonFromTopicSelection(selection)
+    if (lesson.sentences.length === 0) {
+      setNotice('Select at least one topic to start this lesson.')
+      return
+    }
+    const pack = {
+      ...selection.pack,
+      lessons: selection.pack.lessons.map((candidate) =>
+        candidate.id === lesson.id ? lesson : candidate,
+      ),
+    }
+    startLesson(pack, lesson)
+  }
+
+  const navigationCallbacks = {
+    onOpenHome: () => setView('home' as const),
+    onOpenLessons: () => setView('lessons' as const),
+    onOpenSaved: () => setView('saved' as const),
+    onOpenProgress: () => setView('progress' as const),
+    onOpenSettings: () => setView('settings' as const),
+  }
+
   if (booting) {
     return (
       <main className="centered-page boot-screen">
@@ -932,6 +1322,131 @@ export default function App() {
     )
   }
 
+  if (view === 'lessons') {
+    return (
+      <LessonLibraryScreen
+        {...navigationCallbacks}
+        packs={packs}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onOpenPack={openPack}
+      />
+    )
+  }
+
+  if (view === 'pack-detail' && selectedPack) {
+    return (
+      <PackDetailScreen
+        {...navigationCallbacks}
+        pack={selectedPack}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onBack={() => setView('lessons')}
+        onOpenLesson={openLesson}
+      />
+    )
+  }
+
+  if (view === 'lesson-detail' && selectedPack && selectedLesson) {
+    const lessonLexemeIds = new Set(
+      selectedLesson.sentences.flatMap((sentence) =>
+        sentence.targets.map((target) => target.lexemeId),
+      ),
+    )
+    const mastered = [...lessonLexemeIds].filter((lexemeId) => {
+      const schedule =
+        progress.schedulesByLexemeReviewKey[
+          createReviewKey(selectedPack.id, lexemeId)
+        ]
+      return getMasteryPercent(schedule) >= 70
+    }).length
+    const progressPercent = lessonLexemeIds.size === 0
+      ? 0
+      : Math.round((mastered / lessonLexemeIds.size) * 100)
+    return (
+      <LessonDetailScreen
+        {...navigationCallbacks}
+        pack={selectedPack}
+        lesson={selectedLesson}
+        progressPercent={progressPercent}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onBack={() => setView('pack-detail')}
+        onStartLesson={startSelectedLesson}
+      />
+    )
+  }
+
+  if (view === 'settings') {
+    return (
+      <SettingsScreen
+        {...navigationCallbacks}
+        learningMode={settings.learningMode}
+        autoAdvance={settings.autoAdvance}
+        audioEnabled={settings.audioEnabled}
+        speechRate={settings.speechRate}
+        slowerSpeechRate={settings.slowerSpeechRate}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onLearningModeChange={updateHomeLearningMode}
+        onAutoAdvanceChange={(autoAdvance) =>
+          updateSettings({ ...settings, autoAdvance })
+        }
+        onAudioEnabledChange={(audioEnabled) =>
+          updateSettings({ ...settings, audioEnabled })
+        }
+        onSpeechRateChange={(speechRate) =>
+          updateSettings(settingsWithSpeechRate(settings, speechRate))
+        }
+        onSlowerSpeechRateChange={(slowerSpeechRate) =>
+          updateSettings({ ...settings, slowerSpeechRate })
+        }
+        onImportExcel={(file) => void importExcelLessonPacks(file)}
+        onDownloadExcelTemplate={downloadExcelTemplate}
+        onImportJson={(file) => void importLessonPack(file)}
+        onExportBackup={() => void exportBackup()}
+        onRestoreBackup={(file) => void restoreBackup(file)}
+        onExportDiagnostics={() => void exportDiagnostics()}
+        onClearDiagnostics={() => void clearDiagnostics()}
+      />
+    )
+  }
+
+  if (view === 'saved') {
+    return (
+      <SavedScreen
+        {...navigationCallbacks}
+        state={savedScreenState}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onRetry={() => void reloadSavedSentences()}
+        onRemove={removeSavedSentence}
+        onPractice={practiceSavedSentence}
+      />
+    )
+  }
+
+  if (view === 'progress') {
+    return (
+      <ProgressScreen
+        {...navigationCallbacks}
+        state={progressScreenState}
+        storageAvailable={storageAvailable}
+        notice={notice}
+        onRetry={() => {
+          void provider.sessionHistory.list().then((result) => {
+            if (result.ok) {
+              setSessionHistory(result.value)
+              setHistoryError(undefined)
+            } else {
+              setHistoryError(result.error.message)
+            }
+          })
+        }}
+      />
+    )
+  }
+
   if (view === 'learning' && engineState.status === 'active' && context) {
     const { session } = engineState
     const step = targetStep(context.lesson, session)
@@ -958,7 +1473,8 @@ export default function App() {
         activity={session.exerciseMode}
         feedback={feedbackForSession(session)}
         selectedChoiceLexemeId={
-          session.exerciseMode !== 'fill-words'
+          session.exerciseMode === 'word-choice' ||
+          session.exerciseMode === 'listening-choice'
             ? (session.lastEvaluation?.response ?? null)
             : null
         }
@@ -971,12 +1487,17 @@ export default function App() {
           ] ?? []
         }
         sentenceComplete={session.phase === 'sentence-complete'}
+        sentenceSaved={savedSentenceRecords.some(
+          (record) =>
+            record.packId === context.pack.id &&
+            record.sentenceId === context.sentence.id,
+        )}
         speechSupported={speechSupported}
         speaking={speaking}
         audioEnabled={settings.audioEnabled}
         autoAdvance={settings.autoAdvance}
         speechRate={settings.speechRate}
-        slowerSpeechRate={getSlowerSpeechRate(settings.speechRate)}
+        slowerSpeechRate={settings.slowerSpeechRate}
         onPause={pauseSession}
         onRestartSentence={restartSentence}
         onModeChange={setLearningMode}
@@ -987,9 +1508,13 @@ export default function App() {
           updateSettings({ ...settings, autoAdvance })
         }
         onSpeechRateChange={(speechRate) =>
-          updateSettings({ ...settings, speechRate })
+          updateSettings(settingsWithSpeechRate(settings, speechRate))
+        }
+        onSlowerSpeechRateChange={(slowerSpeechRate) =>
+          updateSettings({ ...settings, slowerSpeechRate })
         }
         onEndSession={endSession}
+        onSentenceSavedChange={setCurrentSentenceSaved}
         onSubmitChoice={(choiceId) =>
           submitAnswer({ kind: 'choice', choiceId })
         }
@@ -997,7 +1522,7 @@ export default function App() {
         onContinue={() => engine.advance()}
         onListen={() => speak(context.sentence.speechText, settings.speechRate)}
         onReplaySlower={() =>
-          speak(context.sentence.speechText, getSlowerSpeechRate(settings.speechRate))
+          speak(context.sentence.speechText, settings.slowerSpeechRate)
         }
       />
     )
@@ -1038,6 +1563,7 @@ export default function App() {
 
   return (
     <HomeScreen
+      {...navigationCallbacks}
       packs={packs}
       reviewCount={dailyPlan?.reviewCount ?? 0}
       newCount={dailyPlan?.newCount ?? 0}
@@ -1050,12 +1576,7 @@ export default function App() {
       onStartLearning={startDailyLearning}
       onResume={resumeSession}
       onLearningModeChange={updateHomeLearningMode}
-      onStartLesson={startLesson}
-      onImport={(file) => void importLessonPack(file)}
-      onExportBackup={() => void exportBackup()}
-      onRestoreBackup={(file) => void restoreBackup(file)}
-      onExportDiagnostics={() => void exportDiagnostics()}
-      onClearDiagnostics={() => void clearDiagnostics()}
+      onOpenPack={openPack}
     />
   )
 }

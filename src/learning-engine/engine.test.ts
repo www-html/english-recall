@@ -174,6 +174,20 @@ describe('active and supporting targets', () => {
 })
 
 describe('SRS scheduling invariants', () => {
+  it('checks the full sentence while scheduling only the current target once', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({ pack, lessonId: 'habits', now, learningMode: 'full-sentence' })
+
+    engine.submit({ kind: 'text', value: 'I usually drink tea.' })
+    expect(scheduler.calls).toHaveLength(0)
+    expect(active(engine).currentTargetId).toBe('usually-1')
+
+    engine.submit({ kind: 'text', value: 'I usually drink coffee.' })
+    expect(scheduler.calls).toEqual([{ previous: undefined, rating: 'hard' }])
+    expect(active(engine).scheduledOccurrenceKeys).toEqual(['coffee::usually-1'])
+  })
+
   it('records three wrong attempts then schedules exactly once as hard on correct', () => {
     const scheduler = new RecordingScheduler()
     const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
@@ -244,6 +258,28 @@ describe('completion metrics', () => {
 })
 
 describe('durable restore', () => {
+  it('captures an immutable pre-session schedule baseline', () => {
+    const inputSchedule = { ...weakSchedule }
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      learningMode: 'fill-words',
+      schedulesByLexemeId: { usually: inputSchedule, drink: strongSchedule },
+    })
+
+    inputSchedule.lapses = 99
+    expect(active(engine).initialSchedulesByLexemeId).toEqual({
+      usually: weakSchedule,
+      drink: strongSchedule,
+    })
+
+    engine.submit({ kind: 'text', value: 'usually' })
+    expect(active(engine).schedulesByLexemeId.usually).not.toEqual(weakSchedule)
+    expect(active(engine).initialSchedulesByLexemeId?.usually).toEqual(weakSchedule)
+  })
+
   it('restores active/supporting and scheduling guards exactly', () => {
     const engine = new DefaultLearningEngine(new FixedClock())
     engine.start({ pack, lessonId: 'habits', now, learningMode: 'fill-words' })
@@ -256,6 +292,19 @@ describe('durable restore', () => {
     expect(snapshot.scheduledOccurrenceKeys).toContain(
       createTargetOccurrenceKey('coffee', 'usually-1'),
     )
+  })
+
+  it('restores legacy snapshots without a stored baseline conservatively', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({ pack, lessonId: 'habits', now })
+    const {
+      initialSchedulesByLexemeId: _legacyMissingField,
+      ...legacySnapshot
+    } = active(engine)
+    const restored = new DefaultLearningEngine(new FixedClock())
+
+    expect(restored.restore({ pack, snapshot: legacySnapshot }).ok).toBe(true)
+    expect(active(restored).initialSchedulesByLexemeId).toBeUndefined()
   })
 
   it('preserves an exact multi-target retry, pause, reload, resume and completion flow', () => {

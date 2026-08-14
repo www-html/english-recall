@@ -86,5 +86,34 @@ describe('SummaryScreen result semantics', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Continue Learning/ }))
     expect(onNext).toHaveBeenCalledOnce()
+
+    fireEvent.keyDown(window, { key: ' ' })
+    expect(onNext).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not use Space as Continue Learning for Extra Practice', () => {
+    const onNext = vi.fn()
+    render(
+      <SummaryScreen
+        lessonTitle="Practice"
+        result={{
+          reviewedLexemes: 0,
+          completedTargets: 1,
+          difficultLexemes: 0,
+          correctAnswers: 1,
+          incorrectAnswers: 0,
+          skippedTargets: 0,
+          practiceTargets: 1,
+          accuracyPercent: 100,
+          completedAt: '2026-08-13T00:00:00.000Z',
+        }}
+        onHome={vi.fn()}
+        nextActionLabel="Extra Practice"
+        onNext={onNext}
+      />,
+    )
+
+    fireEvent.keyDown(window, { key: ' ' })
+    expect(onNext).not.toHaveBeenCalled()
   })
 })

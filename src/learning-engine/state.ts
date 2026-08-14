@@ -33,6 +33,7 @@ export const learningModes = [
   'word-choice',
   'fill-words',
   'listening-choice',
+  'full-sentence',
 ] as const
 export type LearningMode = (typeof learningModes)[number]
 export type ExerciseMode = Exclude<LearningMode, 'auto'>
@@ -101,6 +102,13 @@ export interface LearningSessionSnapshot {
   >
   readonly attemptsByLexemeId: Readonly<Record<LexemeId, AttemptSummary>>
   readonly attemptHistory: readonly AttemptSignal[]
+  /**
+   * Immutable schedules captured when the session started. Optional only for
+   * backward compatibility with snapshots persisted before this field existed.
+   */
+  readonly initialSchedulesByLexemeId?: Readonly<
+    Record<LexemeId, ReviewSchedule>
+  >
   readonly schedulesByLexemeId: Readonly<Record<LexemeId, ReviewSchedule>>
   readonly startedAt: IsoDateTime
   readonly questionStartedAt: IsoDateTime

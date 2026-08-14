@@ -1,4 +1,5 @@
 import { ArrowRight, Check, Home, RotateCcw, Sparkles, Target } from 'lucide-react'
+import { useEffect } from 'react'
 import type { SessionResult } from '../../learning-engine/index.ts'
 
 interface SummaryScreenProps {
@@ -16,6 +17,27 @@ export function SummaryScreen({
   nextActionLabel,
   onNext,
 }: SummaryScreenProps) {
+  useEffect(() => {
+    if (nextActionLabel !== 'Continue Learning') return
+    const continueWithSpace = (event: KeyboardEvent) => {
+      if (
+        event.key !== ' ' ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+      ) return
+      const interactiveTarget =
+        event.target instanceof Element &&
+        event.target.closest('button, input, textarea, select, a, [contenteditable="true"]')
+      if (interactiveTarget) return
+      event.preventDefault()
+      onNext()
+    }
+    window.addEventListener('keydown', continueWithSpace)
+    return () => window.removeEventListener('keydown', continueWithSpace)
+  }, [nextActionLabel, onNext])
+
   return (
     <main className="centered-page summary-page">
       <section className="summary-card" aria-labelledby="summary-title">

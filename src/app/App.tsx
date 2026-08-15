@@ -1581,6 +1581,17 @@ export default function App() {
               currentIndex: shadowingContext.currentIndex + 1,
             })
           }}
+          {...(shadowingContext.currentIndex > 0
+            ? {
+                onPrevious: () => {
+                  stopSpeaking()
+                  setShadowingContext({
+                    ...shadowingContext,
+                    currentIndex: shadowingContext.currentIndex - 1,
+                  })
+                },
+              }
+            : {})}
           onExit={leaveShadowing}
         />
       )

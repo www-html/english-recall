@@ -75,6 +75,7 @@ import { prepareExcelPackUpdate } from './excel-import-planning.ts'
 import { shouldAllowLearningSpeech, useSpeech } from './use-speech.ts'
 import { diagnosticsForAttemptTransition } from './session-diagnostics.ts'
 import { useAndroidBackButton } from './use-android-back.ts'
+import { getImportNoticeDuration } from './transient-notice.ts'
 
 type AppView =
   | 'home'
@@ -388,6 +389,18 @@ export default function App() {
   const previousEngineState = useRef<LearningEngineState>({ status: 'idle' })
 
   useEffect(() => engine.subscribe(setEngineState), [engine])
+
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [selectedLessonId, selectedPackId, view])
+
+  useEffect(() => {
+    const duration = getImportNoticeDuration(notice)
+    if (duration === null) return
+
+    const timeout = window.setTimeout(() => setNotice(undefined), duration)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
 
   useEffect(() => {
     let active = true

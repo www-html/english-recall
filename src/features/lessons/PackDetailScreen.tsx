@@ -1,4 +1,5 @@
 import { ArrowLeft, ArrowRight, BookOpen } from 'lucide-react'
+import { useState } from 'react'
 import type { Lesson, LessonPack } from '../../domain/lesson-pack.schema.ts'
 import {
   AppFrame,
@@ -21,6 +22,17 @@ export function PackDetailScreen({
   onOpenLesson,
   ...navigation
 }: PackDetailScreenProps) {
+  const [showAllLessons, setShowAllLessons] = useState(false)
+  const initialLessonCount = 4
+  const visibleLessons = showAllLessons
+    ? pack.lessons
+    : pack.lessons.slice(0, initialLessonCount)
+  const hiddenLessonCount = pack.lessons.length - visibleLessons.length
+  const sentenceCount = pack.lessons.reduce(
+    (total, lesson) => total + lesson.sentences.length,
+    0,
+  )
+
   return (
     <AppFrame
       {...navigation}
@@ -41,8 +53,11 @@ export function PackDetailScreen({
       </header>
 
       <section className="lesson-browser-list" aria-labelledby="pack-lessons-title">
-        <h2 id="pack-lessons-title">Lessons</h2>
-        {pack.lessons.map((lesson) => {
+        <div className="lesson-browser-header">
+          <h2 id="pack-lessons-title">Lessons</h2>
+          <span>{pack.lessons.length} lessons · {sentenceCount} sentences</span>
+        </div>
+        {visibleLessons.map((lesson) => {
           const topicCount = new Set(
             lesson.sentences.map((sentence) => sentence.topic),
           ).size
@@ -62,6 +77,18 @@ export function PackDetailScreen({
             </button>
           )
         })}
+        {pack.lessons.length > initialLessonCount ? (
+          <button
+            className="lesson-browser-more"
+            type="button"
+            aria-expanded={showAllLessons}
+            onClick={() => setShowAllLessons((current) => !current)}
+          >
+            {showAllLessons
+              ? 'Show fewer lessons'
+              : `Show ${hiddenLessonCount} more lesson${hiddenLessonCount === 1 ? '' : 's'}`}
+          </button>
+        ) : null}
       </section>
     </AppFrame>
   )

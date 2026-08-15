@@ -5,6 +5,7 @@ const assetRoot = resolve(process.argv[2] ?? 'android/app/src/main/assets/public
 const configPath = resolve(
   process.argv[3] ?? 'android/app/src/main/assets/capacitor.config.json',
 )
+const manifestPath = resolve('android/app/src/main/AndroidManifest.xml')
 
 function fail(message) {
   console.error(`Android bundle verification failed: ${message}`)
@@ -14,15 +15,27 @@ function fail(message) {
 const indexPath = resolve(assetRoot, 'index.html')
 if (!existsSync(indexPath)) fail('bundled index.html is missing')
 if (!existsSync(configPath)) fail('generated Capacitor config is missing')
+if (!existsSync(manifestPath)) fail('Android manifest is missing')
 
 if (!process.exitCode) {
   const config = JSON.parse(readFileSync(configPath, 'utf8'))
   if (config.server?.url) fail('Capacitor is configured to load a remote URL')
   if (config.appId !== 'com.englishrecall.app') fail('unexpected Android app id')
+  if (config.plugins?.SystemBars?.insetsHandling !== 'css') {
+    fail('SystemBars CSS inset injection is not enabled')
+  }
 
   const html = readFileSync(indexPath, 'utf8')
+  if (!html.includes('interactive-widget=resizes-content')) {
+    fail('mobile viewport does not resize for the software keyboard')
+  }
   if (/<(?:script|link)\b[^>]*(?:src|href)=["']https?:\/\//iu.test(html)) {
     fail('index.html references a remote script or stylesheet')
+  }
+
+  const manifest = readFileSync(manifestPath, 'utf8')
+  if (!manifest.includes('android:windowSoftInputMode="adjustResize"')) {
+    fail('Android activity does not resize above the software keyboard')
   }
 
   const assetsPath = resolve(assetRoot, 'assets')

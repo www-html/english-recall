@@ -12,10 +12,14 @@
   --primary-soft: rgb(117 104 255 / 0.14);
   --success: #34d399;
   --danger: #fb7185;
+  --app-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --app-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  --app-safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --app-safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
 }
 
 #root {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 :where(button, a, input, select, summary):focus-visible {
@@ -25,9 +29,12 @@
 
 .page-shell {
   width: min(100%, 72rem);
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 1.1rem 1rem 4rem;
+  padding: calc(1.1rem + var(--app-safe-top))
+    calc(1rem + var(--app-safe-right))
+    calc(4rem + var(--app-safe-bottom))
+    calc(1rem + var(--app-safe-left));
 }
 
 .topbar,
@@ -578,9 +585,12 @@
   --learning-red: #ff6f80;
   --learning-red-soft: rgb(255 79 101 / 0.1);
   width: min(100%, 62rem);
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 0.85rem 1rem 3rem;
+  padding: calc(0.85rem + var(--app-safe-top))
+    calc(1rem + var(--app-safe-right))
+    calc(3rem + var(--app-safe-bottom))
+    calc(1rem + var(--app-safe-left));
 }
 
 .learning-topbar {
@@ -1381,7 +1391,10 @@
 
 @media (min-width: 760px) {
   .learning-shell {
-    padding: 1.25rem 1.5rem 4rem;
+    padding: calc(1.25rem + var(--app-safe-top))
+      calc(1.5rem + var(--app-safe-right))
+      calc(4rem + var(--app-safe-bottom))
+      calc(1.5rem + var(--app-safe-left));
   }
 
   .fill-submit {
@@ -1391,8 +1404,15 @@
 
 @media (max-width: 430px) {
   .learning-shell {
+    display: flex;
+    height: 100dvh;
     min-height: 100svh;
-    padding: 0.55rem 0.75rem 1.25rem;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: calc(0.55rem + var(--app-safe-top))
+      calc(0.75rem + var(--app-safe-right))
+      calc(1.25rem + var(--app-safe-bottom))
+      calc(0.75rem + var(--app-safe-left));
   }
 
   .brand-mark.small {
@@ -1412,7 +1432,23 @@
   }
 
   .learning-stage {
-    margin-top: 0.85rem;
+    display: flex;
+    min-height: calc(
+      100dvh - var(--app-safe-top) - var(--app-safe-bottom) - 5rem
+    );
+    flex: 1 0 auto;
+    flex-direction: column;
+    justify-content: center;
+    margin-top: 0;
+    padding: 0.75rem 0 1rem;
+  }
+
+  .learning-shell:has(.inline-answer input:focus, .full-sentence-input:focus)
+    .learning-stage {
+    min-height: 0;
+    flex: 0 0 auto;
+    justify-content: flex-start;
+    padding-top: 0.15rem;
   }
 
   .question-audio button {
@@ -1517,9 +1553,12 @@
 /* Pause, summary, loading */
 .centered-page {
   display: grid;
-  min-height: 100vh;
+  min-height: 100dvh;
   place-items: center;
-  padding: 1rem;
+  padding: calc(1rem + var(--app-safe-top))
+    calc(1rem + var(--app-safe-right))
+    calc(1rem + var(--app-safe-bottom))
+    calc(1rem + var(--app-safe-left));
 }
 
 .pause-card,
@@ -1695,17 +1734,18 @@
 
 @media (min-width: 600px) {
   .page-shell {
-    padding-inline: 1.5rem;
+    padding-right: calc(1.5rem + var(--app-safe-right));
+    padding-left: calc(1.5rem + var(--app-safe-left));
   }
 }
 
 @media (min-width: 900px) {
   .page-shell {
-    padding-top: 1.5rem;
+    padding-top: calc(1.5rem + var(--app-safe-top));
   }
 
   .learning-shell {
-    padding-top: 1.5rem;
+    padding-top: calc(1.5rem + var(--app-safe-top));
   }
 }
 
@@ -1722,7 +1762,7 @@
 
 /* Compact product navigation and content views */
 .app-frame {
-  padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(6rem + var(--app-safe-bottom));
 }
 
 .app-topbar {
@@ -1786,9 +1826,9 @@
 .bottom-navigation {
   position: fixed;
   z-index: 25;
-  right: 0.75rem;
-  bottom: calc(0.65rem + env(safe-area-inset-bottom));
-  left: 0.75rem;
+  right: calc(0.75rem + var(--app-safe-right));
+  bottom: calc(0.65rem + var(--app-safe-bottom));
+  left: calc(0.75rem + var(--app-safe-left));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   max-width: 32rem;
@@ -2177,14 +2217,27 @@
   background: rgb(13 17 28 / 0.7);
 }
 
-.lesson-browser-list h2 {
-  margin: 0;
+.lesson-browser-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
   padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--border);
+}
+
+.lesson-browser-list h2 {
+  margin: 0;
   color: var(--muted);
   font-size: 0.68rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+.lesson-browser-header > span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  white-space: nowrap;
 }
 
 .lesson-browser-row {
@@ -2229,6 +2282,26 @@
   color: var(--muted);
   font-size: 0.65rem;
   line-height: 1.45;
+}
+
+.lesson-browser-more {
+  width: 100%;
+  min-height: 3.1rem;
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-top: 1px solid var(--border);
+  color: #aaa4ff;
+  background: rgb(117 104 255 / 0.045);
+  font-size: 0.7rem;
+  font-weight: 720;
+  cursor: pointer;
+  transition: 180ms ease;
+}
+
+.lesson-browser-more:hover,
+.lesson-browser-more:focus-visible {
+  color: #e2e0ff;
+  background: var(--primary-soft);
 }
 
 .lesson-detail-heading {
@@ -2576,11 +2649,11 @@
 
 @media (min-width: 680px) {
   .app-frame {
-    padding-bottom: 7rem;
+    padding-bottom: calc(7rem + var(--app-safe-bottom));
   }
 
   .bottom-navigation {
-    bottom: 1rem;
+    bottom: calc(1rem + var(--app-safe-bottom));
   }
 
   .home-progress-summary {
@@ -2612,6 +2685,55 @@
   .lesson-start-button {
     width: auto;
     min-width: 12rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .back-action {
+    margin-top: 1.25rem;
+  }
+
+  .view-heading {
+    padding-top: 2rem;
+  }
+
+  .view-heading h1 {
+    font-size: clamp(1.7rem, 7vw, 2rem);
+    line-height: 1.08;
+    text-wrap: pretty;
+  }
+
+  .pack-detail-heading {
+    display: block;
+    padding-top: 0.9rem;
+  }
+
+  .pack-detail-heading .pack-icon {
+    display: none;
+  }
+
+  .pack-detail-heading > div > p:last-child {
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+
+  .lesson-browser-header {
+    align-items: baseline;
+    padding: 0.72rem 0.8rem;
+  }
+
+  .lesson-browser-row {
+    min-height: 4.15rem;
+    padding: 0.72rem 0.8rem;
+  }
+
+  .lesson-browser-row strong {
+    font-size: 0.79rem;
+    line-height: 1.3;
+  }
+
+  .lesson-browser-row small:first-of-type {
+    display: none;
   }
 }
 

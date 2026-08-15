@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseLessonPack } from '../../domain/lesson-pack.schema.ts'
 import { LessonDetailScreen } from './LessonDetailScreen.tsx'
 import { LessonLibraryScreen } from './LessonLibraryScreen.tsx'
+import { PackDetailScreen } from './PackDetailScreen.tsx'
 
 const PACK = parseLessonPack({
   schemaVersion: 3, id: 'topics-pack', version: '1.0.0', title: 'Project English',
@@ -49,6 +50,38 @@ describe('lesson drill-down', () => {
     render(<LessonLibraryScreen {...navigation} packs={[PACK]} storageAvailable notice={undefined} onOpenPack={onOpenPack} />)
     fireEvent.click(screen.getByRole('button', { name: /Project English/ }))
     expect(onOpenPack).toHaveBeenCalledWith(PACK)
+  })
+
+  it('keeps large lesson packs compact until the learner expands them', () => {
+    const manyLessons = {
+      ...PACK,
+      lessons: Array.from({ length: 6 }, (_, index) => ({
+        ...PACK.lessons[0]!,
+        id: `delivery-${index + 1}`,
+        title: `Lesson ${index + 1}`,
+        sentences: PACK.lessons[0]!.sentences.map((sentence) => ({
+          ...sentence,
+          id: `${sentence.id}-${index + 1}`,
+        })),
+      })),
+    }
+
+    render(
+      <PackDetailScreen
+        {...navigation}
+        pack={manyLessons}
+        storageAvailable
+        notice={undefined}
+        onBack={vi.fn()}
+        onOpenLesson={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('6 lessons · 12 sentences')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Lesson 5/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more lessons' }))
+    expect(screen.getByRole('button', { name: /Lesson 6/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show fewer lessons' })).toBeTruthy()
   })
 
   it('derives topics, validates selection, and sends an explicit start contract', () => {

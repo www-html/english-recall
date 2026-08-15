@@ -65,6 +65,7 @@ import {
   type DiagnosticInput,
 } from '../persistence/index.ts'
 import type { LexemeId } from '../shared/types.ts'
+import { exportLocalFile } from '../platform/local-file-export.ts'
 import './app.css'
 import {
   createDailyLearningPlan,
@@ -73,6 +74,7 @@ import {
 import { prepareExcelPackUpdate } from './excel-import-planning.ts'
 import { shouldAllowLearningSpeech, useSpeech } from './use-speech.ts'
 import { diagnosticsForAttemptTransition } from './session-diagnostics.ts'
+import { useAndroidBackButton } from './use-android-back.ts'
 
 type AppView =
   | 'home'
@@ -1219,11 +1221,19 @@ export default function App() {
     }
   }
 
-  const downloadExcelTemplate = () => {
-    const link = document.createElement('a')
-    link.href = EXCEL_LESSON_PACK_TEMPLATE_URL
-    link.download = 'english-recall-lesson-pack-template.xlsx'
-    link.click()
+  const downloadExcelTemplate = async () => {
+    try {
+      const response = await fetch(EXCEL_LESSON_PACK_TEMPLATE_URL)
+      if (!response.ok) throw new Error('Template asset is unavailable')
+      await exportLocalFile({
+        fileName: 'english-recall-lesson-pack-template.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        data: await response.blob(),
+        title: 'English Recall lesson pack template',
+      })
+    } catch (error) {
+      setNotice(`Could not export template: ${error instanceof Error ? error.message : 'Unknown export error'}`)
+    }
   }
 
   const exportBackup = async () => {
@@ -1239,17 +1249,24 @@ export default function App() {
       return
     }
 
-    const blob = new Blob([JSON.stringify(result.value, null, 2)], {
-      type: 'application/json',
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `english-recall-backup-${result.value.exportedAt.slice(0, 10)}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-    setNotice('Backup exported successfully.')
-    recordDiagnostic({ level: 'info', event: 'backup_exported' })
+    try {
+      await exportLocalFile({
+        fileName: `english-recall-backup-${result.value.exportedAt.slice(0, 10)}.json`,
+        mimeType: 'application/json',
+        data: JSON.stringify(result.value, null, 2),
+        title: 'English Recall learner backup',
+      })
+      setNotice('Backup exported successfully.')
+      recordDiagnostic({ level: 'info', event: 'backup_exported' })
+    } catch (error) {
+      setNotice(`Could not export backup: ${error instanceof Error ? error.message : 'Unknown export error'}`)
+      recordDiagnostic({
+        level: 'error',
+        event: 'persistence_failed',
+        errorCode: 'file-export-failed',
+        metadata: { operation: 'export_backup_file' },
+      })
+    }
   }
 
   const restoreBackup = async (file: File) => {
@@ -1294,16 +1311,17 @@ export default function App() {
       setNotice(`Could not export diagnostics: ${result.error.message}`)
       return
     }
-    const blob = new Blob([JSON.stringify(result.value, null, 2)], {
-      type: 'application/json',
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `english-recall-diagnostics-${result.value.exportedAt.slice(0, 10)}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-    setNotice('Diagnostics exported successfully.')
+    try {
+      await exportLocalFile({
+        fileName: `english-recall-diagnostics-${result.value.exportedAt.slice(0, 10)}.json`,
+        mimeType: 'application/json',
+        data: JSON.stringify(result.value, null, 2),
+        title: 'English Recall diagnostics',
+      })
+      setNotice('Diagnostics exported successfully.')
+    } catch (error) {
+      setNotice(`Could not export diagnostics: ${error instanceof Error ? error.message : 'Unknown export error'}`)
+    }
   }
 
   const clearDiagnostics = async () => {
@@ -1386,6 +1404,46 @@ export default function App() {
     onOpenProgress: () => setView('progress' as const),
     onOpenSettings: () => setView('settings' as const),
   }
+
+  useAndroidBackButton(() => {
+    const overlay = document.querySelector<HTMLElement>(
+      '[role="alertdialog"], [role="dialog"], .learning-menu',
+    )
+    if (overlay) {
+      overlay.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }))
+      return true
+    }
+
+    stopSpeaking()
+    if (view === 'shadowing' && shadowingContext) {
+      setView(shadowingContext.returnView)
+      setShadowingContext(undefined)
+      return true
+    }
+    if (view === 'learning') {
+      pauseSession()
+      return true
+    }
+    if (view === 'pause') {
+      resumeSession()
+      return true
+    }
+    if (view === 'pack-detail') {
+      setView('lessons')
+      return true
+    }
+    if (view === 'lesson-detail') {
+      setView('pack-detail')
+      return true
+    }
+    if (view === 'home') return false
+    setView('home')
+    return true
+  })
 
   if (booting) {
     return (

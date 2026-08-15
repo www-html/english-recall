@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './app/App.tsx'
@@ -21,7 +22,7 @@ createRoot(rootElement).render(
   </StrictMode>,
 )
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+if (!Capacitor.isNativePlatform() && 'serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker
       .register(`${import.meta.env.BASE_URL}service-worker.js`, {

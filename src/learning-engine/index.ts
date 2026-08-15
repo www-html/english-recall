@@ -14,6 +14,7 @@ export type {
 export {
   createTargetOccurrenceKey,
   DefaultLearningEngine,
+  isScheduledReviewDue,
   MAX_NEW_PER_SESSION,
   MAX_REVIEW_PER_SESSION,
   MAX_TOTAL_ACTIVE_TARGETS,

@@ -81,8 +81,10 @@ model; migration requires an explicit authored mapping.
 3. `DefaultLearningEngine` owns question, target feedback, sentence completion,
    pause, resume, restart, and final completion transitions. Wrong answers stay
    on the current target and never expose the expected answer.
-4. The planner selects new, due, or weak targets for active recall and leaves
-   strong not-due targets visible as supporting context. Incorrect attempts are
+4. The planner selects new targets and scheduled targets whose `dueAt` is not
+   later than now. Weakness raises priority only among already-due targets;
+   future-due targets remain supporting context or practice-only content.
+   Incorrect attempts are
    retained without touching SRS. `BasicReviewScheduler` updates a lexeme once
    when its target resolves: Good first try, Hard after retry, Again on skip.
    Adaptive Learn selects Choose the Word for new/weak lexemes, Type the Word
@@ -98,7 +100,7 @@ model; migration requires an explicit authored mapping.
 ## Production durability
 
 - Each session is bounded to 20 reviews and 5 new lexemes, with at most 25
-  active targets. Selection order is overdue, weak, due, then new.
+  active targets. Selection order is overdue, already-due weak, due, then new.
 - IndexedDB progress and active-session mutations share an ordered operation
   queue and the current learning state is committed in one transaction. Backup
   restore validates everything first and replaces local stores atomically.

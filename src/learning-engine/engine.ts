@@ -45,6 +45,15 @@ export const MAX_TOTAL_ACTIVE_TARGETS = 25
 
 type CandidatePriority = 0 | 1 | 2 | 3
 
+export function isScheduledReviewDue(
+  schedule: ReviewSchedule,
+  now: string | number,
+): boolean {
+  const dueAt = Date.parse(schedule.dueAt)
+  const nowTime = typeof now === 'number' ? now : Date.parse(now)
+  return Number.isFinite(dueAt) && Number.isFinite(nowTime) && dueAt <= nowTime
+}
+
 function startOfUtcDay(timestamp: number): number {
   const date = new Date(timestamp)
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
@@ -56,10 +65,10 @@ function candidatePriority(
 ): CandidatePriority | undefined {
   if (!schedule) return 3
   const dueAt = Date.parse(schedule.dueAt)
+  if (!isScheduledReviewDue(schedule, now)) return undefined
   if (dueAt < startOfUtcDay(now)) return 0
   if (getMasteryPercent(schedule) < 40) return 1
-  if (dueAt <= now) return 2
-  return undefined
+  return 2
 }
 
 class DueFirstSentenceSelector implements SentenceSelector {

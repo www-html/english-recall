@@ -174,12 +174,12 @@ describe('daily session limits', () => {
 })
 
 describe('deterministic priority and deduplication', () => {
-  it('orders overdue before weak, due, then new', () => {
+  it('orders overdue before already-due weak, due, then new', () => {
     const categories = ['new', 'due', 'weak', 'overdue']
     const sentences = categories.map((id, index) => makeSentence(index, [id]))
     const schedules = {
       overdue: schedule('2026-08-01T00:00:00.000Z'),
-      weak: schedule('2026-09-01T00:00:00.000Z', {
+      weak: schedule('2026-08-13T10:00:00.000Z', {
         intervalDays: 1,
         easeFactor: 1.4,
         repetitions: 1,

@@ -6,6 +6,7 @@ import {
   createDailyLearningPlan,
   createStableChoices,
 } from './session-planning.ts'
+import { DefaultLearningEngine } from '../learning-engine/index.ts'
 
 const pack = parseLessonPack(starterPackJson)
 
@@ -26,7 +27,7 @@ describe('session planning', () => {
     expect(correctPositions.size).toBeGreaterThan(1)
   })
 
-  it('counts new, due and weak lexemes for the best daily lesson', () => {
+  it('counts due lexemes but excludes weak future-due schedules', () => {
     const firstLesson = pack.lessons[0]!
     const lexemeIds = [
       ...new Set(
@@ -62,8 +63,64 @@ describe('session planning', () => {
       Date.parse(now),
     )
 
-    expect(plan).toMatchObject({ reviewCount: 2 })
+    expect(plan).toMatchObject({ reviewCount: 1 })
     expect(plan?.newCount).toBe(Math.min(5, lexemeIds.length - 2))
+  })
+
+  it('keeps Home counts aligned with engine review eligibility', () => {
+    const lesson = pack.lessons[0]!
+    const lexemeIds = [
+      ...new Set(
+        lesson.sentences.flatMap((sentence) =>
+          sentence.targets.map((target) => target.lexemeId),
+        ),
+      ),
+    ]
+    const now = '2026-08-13T12:00:00.000Z'
+    const schedulesByLexemeId = Object.fromEntries(
+      lexemeIds.map((lexemeId, index) => [
+        lexemeId,
+        {
+          dueAt:
+            index === 0
+              ? '2026-08-13T11:00:00.000Z'
+              : '2026-09-13T12:00:00.000Z',
+          intervalDays: index === 1 ? 1 : 30,
+          easeFactor: index === 1 ? 1.3 : 2.5,
+          repetitions: 1,
+          lapses: index === 1 ? 3 : 0,
+        },
+      ]),
+    )
+    const progress = {
+      ...createInitialProgress(),
+      schedulesByLexemeReviewKey: Object.fromEntries(
+        Object.entries(schedulesByLexemeId).map(([lexemeId, schedule]) => [
+          createReviewKey(pack.id, lexemeId),
+          schedule,
+        ]),
+      ),
+    }
+    const plan = createDailyLearningPlan(
+      [{ ...pack, lessons: [lesson] }],
+      progress,
+      Date.parse(now),
+    )
+    const engine = new DefaultLearningEngine()
+    const started = engine.start({
+      pack: { ...pack, lessons: [lesson] },
+      lessonId: lesson.id,
+      schedulesByLexemeId,
+      now,
+    })
+    if (!started.ok || started.value.current.status !== 'active') {
+      throw new Error('Expected an active session')
+    }
+
+    expect(plan?.reviewCount).toBe(1)
+    expect(plan?.newCount).toBe(0)
+    expect(started.value.current.session.reviewableOccurrenceKeys).toHaveLength(1)
+    expect(started.value.current.session.isPracticeFallback).toBe(false)
   })
 
   it('prefers review work and reports production-bounded daily counts', () => {

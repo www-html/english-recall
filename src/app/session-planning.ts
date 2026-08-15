@@ -4,7 +4,7 @@ import type {
   TargetOccurrence,
 } from '../domain/lesson-pack.schema.ts'
 import {
-  getMasteryPercent,
+  isScheduledReviewDue,
   MAX_NEW_PER_SESSION,
   MAX_REVIEW_PER_SESSION,
   MAX_TOTAL_ACTIVE_TARGETS,
@@ -89,10 +89,7 @@ function lessonCounts(
 
     if (!schedule) {
       newCount += 1
-    } else if (
-      Date.parse(schedule.dueAt) <= now ||
-      getMasteryPercent(schedule) < 40
-    ) {
+    } else if (isScheduledReviewDue(schedule, now)) {
       reviewCount += 1
     }
   }

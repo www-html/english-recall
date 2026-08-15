@@ -228,7 +228,7 @@ describe('active and supporting targets', () => {
     expect(active(engine).sentenceQueue).toEqual(['coffee'])
   })
 
-  it('treats weak but not-due mastery as active', () => {
+  it('does not make weak future-due mastery reviewable', () => {
     const engine = new DefaultLearningEngine(new FixedClock())
     engine.start({
       pack,
@@ -236,7 +236,24 @@ describe('active and supporting targets', () => {
       now,
       schedulesByLexemeId: { usually: weakSchedule, drink: strongSchedule },
     })
-    expect(active(engine).activeTargetIdsBySentenceId).toEqual({ coffee: ['usually-1'] })
+    expect(active(engine).isPracticeFallback).toBe(true)
+    expect(active(engine).reviewableOccurrenceKeys).toEqual([])
+  })
+
+  it('makes weak mastery reviewable once it is due', () => {
+    const engine = new DefaultLearningEngine(new FixedClock())
+    engine.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      schedulesByLexemeId: {
+        usually: { ...weakSchedule, dueAt: now },
+        drink: strongSchedule,
+      },
+    })
+
+    expect(active(engine).isPracticeFallback).toBe(false)
+    expect(active(engine).reviewableOccurrenceKeys).toEqual(['coffee::usually-1'])
   })
 
   it('falls back to non-reviewable practice when nothing is active', () => {
@@ -256,6 +273,25 @@ describe('active and supporting targets', () => {
     expect(scheduler.calls).toHaveLength(0)
     expect(active(withScheduler).schedulesByLexemeId.usually).toEqual(strongSchedule)
     expect(engine.getState()).toEqual({ status: 'idle' })
+  })
+
+  it('allows explicit practice with future-due weak content without scheduling it', () => {
+    const scheduler = new RecordingScheduler()
+    const engine = new DefaultLearningEngine(new FixedClock(), undefined, scheduler)
+    engine.start({
+      pack,
+      lessonId: 'habits',
+      now,
+      learningMode: 'fill-words',
+      practiceOnly: true,
+      schedulesByLexemeId: { usually: weakSchedule, drink: strongSchedule },
+    })
+
+    const before = active(engine).schedulesByLexemeId
+    engine.submit({ kind: 'text', value: 'usually' })
+
+    expect(scheduler.calls).toHaveLength(0)
+    expect(active(engine).schedulesByLexemeId).toEqual(before)
   })
 })
 
@@ -345,7 +381,8 @@ describe('completion metrics', () => {
 
 describe('durable restore', () => {
   it('captures an immutable pre-session schedule baseline', () => {
-    const inputSchedule = { ...weakSchedule }
+    const dueWeakSchedule = { ...weakSchedule, dueAt: now }
+    const inputSchedule = { ...dueWeakSchedule }
     const engine = new DefaultLearningEngine(new FixedClock())
     engine.start({
       pack,
@@ -357,13 +394,13 @@ describe('durable restore', () => {
 
     inputSchedule.lapses = 99
     expect(active(engine).initialSchedulesByLexemeId).toEqual({
-      usually: weakSchedule,
+      usually: dueWeakSchedule,
       drink: strongSchedule,
     })
 
     engine.submit({ kind: 'text', value: 'usually' })
-    expect(active(engine).schedulesByLexemeId.usually).not.toEqual(weakSchedule)
-    expect(active(engine).initialSchedulesByLexemeId?.usually).toEqual(weakSchedule)
+    expect(active(engine).schedulesByLexemeId.usually).not.toEqual(dueWeakSchedule)
+    expect(active(engine).initialSchedulesByLexemeId?.usually).toEqual(dueWeakSchedule)
   })
 
   it('restores active/supporting and scheduling guards exactly', () => {

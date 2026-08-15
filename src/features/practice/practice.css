@@ -15,21 +15,13 @@
 }
 
 .shadowing-header > div {
-  display: grid;
-  gap: 0.1rem;
   min-width: 0;
 }
 
-.shadowing-header span {
-  color: var(--muted);
-  font-size: 0.76rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .shadowing-header strong {
+  display: block;
   overflow: hidden;
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -49,8 +41,9 @@
 }
 
 .shadowing-position {
-  letter-spacing: 0 !important;
-  text-transform: none !important;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .shadowing-stage {
@@ -157,6 +150,7 @@
 }
 
 .shadowing-audio-actions button,
+.shadowing-recorder-actions button,
 .shadowing-primary-action button {
   align-items: center;
   justify-content: center;
@@ -176,23 +170,27 @@
 
 .shadowing-audio-actions button:hover:not(:disabled),
 .shadowing-icon-button:hover,
+.shadowing-recorder-actions button:hover:not(:disabled),
 .shadowing-primary-action button:hover:not(:disabled) {
   border-color: var(--learning-blue, #69a8ff);
 }
 
 .shadowing-audio-actions button:focus-visible,
 .shadowing-icon-button:focus-visible,
+.shadowing-recorder-actions button:focus-visible,
 .shadowing-primary-action button:focus-visible {
   outline: 2px solid var(--learning-blue, #69a8ff);
   outline-offset: 3px;
 }
 
 .shadowing-audio-actions button:active:not(:disabled),
+.shadowing-recorder-actions button:active:not(:disabled),
 .shadowing-primary-action button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
 .shadowing-audio-actions button:disabled,
+.shadowing-recorder-actions button:disabled,
 .shadowing-primary-action button:disabled {
   color: var(--muted);
   cursor: not-allowed;
@@ -225,9 +223,99 @@
   margin: -0.5rem 0;
 }
 
+.shadowing-recorder {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1.1rem;
+  background: var(--surface-raised);
+}
+
+.shadowing-recorder.is-recording {
+  border-color: var(--learning-blue, #69a8ff);
+}
+
+.shadowing-recorder-copy {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  color: var(--learning-blue, #69a8ff);
+}
+
+.shadowing-recorder-copy > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.shadowing-recorder-copy strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.shadowing-recorder-copy p {
+  margin: 0;
+  color: var(--muted-bright);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.shadowing-recording-audio {
+  display: none;
+}
+
+.shadowing-recorder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.shadowing-recorder-actions button {
+  flex: 1 1 10rem;
+}
+
+.shadowing-recorder.is-recording .shadowing-recorder-actions button {
+  border-color: currentColor;
+  color: var(--danger, #ef6b73);
+}
+
+.shadowing-recording-compare {
+  align-items: center;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface-raised);
+}
+
+.shadowing-recording-compare > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.shadowing-recording-compare strong {
+  font-size: 0.9rem;
+}
+
+.shadowing-recording-compare p {
+  margin: 0;
+  color: var(--muted-bright);
+  font-size: 0.8rem;
+}
+
 @media (min-width: 700px) {
   .shadowing-shell {
     padding-inline: 2rem;
+  }
+
+  .shadowing-recording-compare {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .shadowing-recording-compare .shadowing-recorder-actions {
+    flex-wrap: nowrap;
   }
 }
 
@@ -243,5 +331,9 @@
 
   .shadowing-listening-visual {
     min-height: 7rem;
+  }
+
+  .shadowing-recorder-actions {
+    display: grid;
   }
 }
